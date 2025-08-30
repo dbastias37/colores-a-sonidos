@@ -1,0 +1,17 @@
+Refactor a React + Vite + Tone.js app that turns image colors into ambient audio:
+
+Goals:
+- Absolutely no audio dropouts when scrolling or switching tabs. Resume the WebAudio context and Transport on visibilitychange if playback was active.
+- Zero memory leaks: reuse a single global FX chain (reverb, delay, compressor, limiter), dispose all old synths/filters/loops when loading a new image, and revoke any old ObjectURLs for image previews.
+- Keep a calm ambient base drone but add subtle syncopated plucks and richer scales (dorian, phrygian, lydian, whole tone, hirajoshi, pentatonic). Map color temperature + saturation to scale choice. Map brightness to BPM and pluck density.
+- When loading a new image while playing, stop previous sequences and dispose voices before analyzing. After analysis, rebuild voices and restart sequences without pops.
+- Use safe volumes and a master compressor/limiter to prevent clicks or clipping. Reuse global reverb/delay to avoid CPU spikes.
+- Cancel any in-flight image analysis when a new file is selected.
+- Ensure Tone.Context lookAhead ~0.1 for stable scheduling.
+- The app must run as a static site (Vite) with Tailwind, no backend.
+
+Deliverables:
+1) A single React component <ColorSoundSynthesizer/> implementing the fixes above.
+2) Helper functions for image analysis (RGB→HSL, dominant colors, color entropy).
+3) Clean dispose logic for stop/softStop/hardStop.
+4) A README section with Render Static deployment instructions (build: `npm install && npm run build`, publish dir: `dist`).
