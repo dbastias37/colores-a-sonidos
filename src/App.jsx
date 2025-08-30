@@ -1,6 +1,6 @@
 import React from 'react'
-import ColorSoundSynthesizer from './ColorSoundSynthesizer.jsx'
+import Synth from './synth/ColorSynth.jsx'
 
-export default function App() {
-  return <ColorSoundSynthesizer />
+export default function App(){
+  return <Synth/>
 }
