@@ -12,12 +12,6 @@ body{font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Helvetica,
 .imgBox{ width:100%; aspect-ratio:16/9; background:rgba(0,0,0,.18); border:1px solid #374151; border-radius:10px; overflow:hidden; display:grid; place-items:center; }
 .img { width:100%; height:100%; object-fit: contain; display:block; }
 
-/* Viz al FONDO (detrás del contenido) */
-.bgViz{ position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.76; }
-.bgViz canvas{ width:100%; height:100%; display:block; filter:blur(22px) saturate(120%); }
-
-/* Failsafe: si no puede ir detrás, esta clase lo sube al frente */
-.bgViz.front{ z-index:50; }
-
-/* Asegura que el contenido quede arriba del fondo */
-.container{ position:relative; z-index:1; }
+/* Portal de fondo para el visualizador */
+#bg-viz-portal{ position:fixed; inset:0; z-index:-1; pointer-events:none; }
+#bg-viz-portal canvas{ width:100%; height:100%; display:block; filter:blur(18px) saturate(120%); opacity:.82; }
