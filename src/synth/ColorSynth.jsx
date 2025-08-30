@@ -52,6 +52,8 @@ export default function ColorSynth(){
   const seqK = useRef(null); const seqS = useRef(null); const seqH = useRef(null)
 
   // viz
+  // --- Visual autónomo: orbes por paleta ---
+  const VISIBLE_BOOST = /Mobi|Android/i.test(navigator.userAgent) ? 1.1 : 1.2   // +20% visibilidad
   const portalCanvasRef = useRef(null)   // nodo <canvas> real en el portal
   const rafRef = useRef(null)
   const particlesRef = useRef([])
@@ -459,7 +461,9 @@ export default function ColorSynth(){
 
     const loop = (ts) => {
       const { w, h } = sizeRef.current
-      ctx.clearRect(0, 0, w, h)
+      ctx.globalCompositeOperation = 'source-over'
+      ctx.fillStyle = 'rgba(4, 8, 20, 0.08)' // ~20% menos opaco
+      ctx.fillRect(0, 0, w, h)
 
       // “viento” muy leve y +5% movimiento
       const t = ts * 0.0003
@@ -484,8 +488,10 @@ export default function ColorSynth(){
           continue
         }
 
+        // mezcla aditiva para más brillo suaves (glow)
+        ctx.globalCompositeOperation = 'lighter'
         const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r)
-        g.addColorStop(0, `hsla(${p.h|0}, ${Math.round(p.s*100)}%, ${Math.round(p.l*100)}%, ${0.35 * p.intensity})`)
+        g.addColorStop(0, `hsla(${p.h|0}, ${Math.round(p.s*100)}%, ${Math.round(p.l*100)}%, ${Math.min(0.6, 0.35 * p.intensity * VISIBLE_BOOST)})`)
         g.addColorStop(1, `hsla(${p.h|0}, ${Math.round(p.s*100)}%, ${Math.round(p.l*100)}%, 0)`)
         ctx.fillStyle = g
         ctx.beginPath()
@@ -498,6 +504,8 @@ export default function ColorSynth(){
       if (particlesRef.current.length > MAX) {
         particlesRef.current.splice(0, particlesRef.current.length - MAX)
       }
+      // vuelve al modo normal para el próximo velo
+      ctx.globalCompositeOperation = 'source-over'
       rafRef.current = requestAnimationFrame(loop)
     }
 

@@ -14,4 +14,10 @@ body{font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Helvetica,
 
 /* Portal de fondo para el visualizador */
 #bg-viz-portal{ position:fixed; inset:0; z-index:-1; pointer-events:none; }
-#bg-viz-portal canvas{ width:100%; height:100%; display:block; filter:blur(18px) saturate(120%); opacity:.82; }
+#bg-viz-portal canvas{
+  width:100%; height:100%; display:block;
+  /* un pelín menos blur y más saturación para ganar presencia */
+  filter: blur(16px) saturate(125%);
+  /* +20% (0.82 → ~0.98, pero lo dejamos en 0.95 para no quemar) */
+  opacity: .95;
+}
