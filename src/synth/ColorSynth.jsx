@@ -290,7 +290,7 @@ export default function ColorSynth(){
     const thr = (arr,t)=>arr.map(v=>v>=t?1:0)
     const n=Math.max(1,strong.length)
     const tK= .42/(Math.sqrt(n)+.2), tS=.48/(Math.sqrt(n)+.2), tH=.36/(Math.sqrt(n)+.2)
-    return {K:thr(K,tK),S:thr(S,tS),H:thr(H,tH), vK:K.map(v=>v?.22||0), vS:S.map(v=>v?.16||0), vH:H.map(v=>v?.1||0)}
+    return {K:thr(K,tK),S:thr(S,tS),H:thr(H,tH), vK:K.map(v=>v ? .22 : 0), vS:S.map(v=>v ? .16 : 0), vH:H.map(v=>v ? .1 : 0)}
   }
 
   const makeDrumSeq = ({K,S,H,vK,vS,vH})=>{

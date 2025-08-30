@@ -3,6 +3,7 @@
   "version": "1.6.1",
   "private": true,
   "type": "module",
+  "packageManager": "npm@10",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -18,7 +19,6 @@
     "@vitejs/plugin-react": "^4.3.1",
     "vite": "^5.4.1"
   },
-  "packageManager": "npm@10",
   "overrides": {
     "rollup": "^4.21.0",
     "esbuild": "^0.21.5",
