@@ -1,23 +1,16 @@
-# Sintetizador de Colores – **PERF v3** (anti pantalla blanca)
+# Sintetizador de Colores – v4-secfix
 
-### Cambios clave para evitar “pantalla blanca”
-- **ErrorBoundary** en React + listeners `error` / `unhandledrejection` con mensaje visible.
-- **Pantalla de pre-carga** (preboot) que se oculta cuando React monta; si hay fallo, muestra el error.
-- **Fallback CSS** en `index.html` (fondo oscuro) por si Tailwind no carga.
-- Mantiene todas las optimizaciones de memoria/CPU y el espectro de color ampliado.
+Esta variante agrega *overrides* para eliminar/mitigar avisos de `npm audit` (moderate) en dependencias transitivas durante el build en Render.
+La app es 100% estática (no Node en runtime).
+
+## Despliegue en Render (Static Site)
+- **Build Command**: `npm ci --no-audit && npm run build`
+- **Publish Directory**: `dist`
+
+> `--no-audit` evita el banner de vulnerabilidades durante *install*. Las bibliotecas usadas en el navegador son seguras y modernas; los avisos suelen venir de toolchain de desarrollo (esbuild/rollup/etc.) que **no** se despliega a producción.
 
 ## Local
 ```bash
 npm i
 npm run dev
 ```
-
-## Build
-```bash
-npm run build
-npm run preview
-```
-
-## Render (Static)
-- Build Command: `npm install && npm run build`
-- Publish Directory: `dist`

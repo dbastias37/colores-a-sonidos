@@ -1,6 +1,6 @@
 {
   "name": "color-sound-synth-min-es-v4",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -17,5 +17,18 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
     "vite": "^5.4.1"
+  },
+  "packageManager": "npm@10",
+  "overrides": {
+    "rollup": "^4.21.0",
+    "esbuild": "^0.21.5",
+    "follow-redirects": "^1.15.6",
+    "ws": "^8.17.0",
+    "minimatch": "^9.0.4",
+    "glob-parent": "^6.0.2",
+    "braces": "^3.0.3",
+    "ansi-regex": "^6.0.1",
+    "object-inspect": "^1.13.2",
+    "undici": "^6.19.8"
   }
 }
