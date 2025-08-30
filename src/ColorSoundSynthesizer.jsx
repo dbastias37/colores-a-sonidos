@@ -619,6 +619,10 @@ const SintetizadorDeColores = () => {
     ruidoRef.current = { noise:null, autoFilter:null, filter:null };
   };
 
+  const limpiarVoces = () => { // Limpia voces y loops pero conserva buses/FX
+  softStop();
+};
+
   const hardStopAndDispose = () => {
     softStop();
     try { Tone.Transport.stop(); Tone.Transport.cancel(0); } catch {}
