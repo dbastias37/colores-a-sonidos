@@ -31,6 +31,7 @@ const SintetizadorDeColores = () => {
     padDb: -22,
     campanasDb: -24,
     ruidoDb: -35,
+    bateriaDb: -28,
   });
 
   // Refs
@@ -43,9 +44,9 @@ const SintetizadorDeColores = () => {
   // Nodos
   const masterRef = useRef(null);
   const fxRef = useRef({ reverb: null, delay: null, comp: null, limiter: null });
-  const busesRef = useRef({ drone: null, colores: null, plucks: null, pad: null, campanas: null, ruido: null });
+  const busesRef = useRef({ drone: null, colores: null, plucks: null, pad: null, campanas: null, ruido: null, bateria: null });
 
-  // Instrumentos
+  // Instrumentos de tono/ambiente
   const ambientSynthRef = useRef(null);
   const synthsRef = useRef([]);     // voces por color
   const plucksRef = useRef([]);     // plucks
@@ -53,11 +54,19 @@ const SintetizadorDeColores = () => {
   const campanasRef = useRef(null); // FMSynth bells
   const ruidoRef = useRef({ noise: null, autoFilter: null, filter: null });
 
+  // Drumkit
+  const kickRef = useRef(null);
+  const snareRef = useRef(null);
+  const hatRef = useRef(null);
+
   // Loops
   const loopColoresRef = useRef(null);
   const loopPlucksRef = useRef(null);
   const loopPadRef = useRef(null);
   const loopCampanasRef = useRef(null);
+  const seqKickRef = useRef(null);
+  const seqSnareRef = useRef(null);
+  const seqHatRef = useRef(null);
 
   // Escalas
   const escalas = {
@@ -99,12 +108,15 @@ const SintetizadorDeColores = () => {
   useEffect(() => {
     try {
       const setBusDb = (bus, db) => bus?.gain?.rampTo(Tone.dbToGain(db), 0.05);
-      setBusDb(busesRef.current.drone, mixer.droneDb);
-      setBusDb(busesRef.current.colores, mixer.coloresDb);
-      setBusDb(busesRef.current.plucks, mixer.plucksDb);
-      setBusDb(busesRef.current.pad, mixer.padDb);
-      setBusDb(busesRef.current.campanas, mixer.campanasDb);
-      setBusDb(busesRef.current.ruido, mixer.ruidoDb);
+      const B = busesRef.current;
+      if (!B) return;
+      setBusDb(B.drone, mixer.droneDb);
+      setBusDb(B.colores, mixer.coloresDb);
+      setBusDb(B.plucks, mixer.plucksDb);
+      setBusDb(B.pad, mixer.padDb);
+      setBusDb(B.campanas, mixer.campanasDb);
+      setBusDb(B.ruido, mixer.ruidoDb);
+      setBusDb(B.bateria, mixer.bateriaDb);
     } catch {}
   }, [mixer]);
 
@@ -113,8 +125,8 @@ const SintetizadorDeColores = () => {
       const master = new Tone.Gain(1);
       const comp = new Tone.Compressor(-22, 3);
       const limiter = new Tone.Limiter(-1);
-      const reverb = new Tone.Reverb({ roomSize: ajustesAudio.reverb, wet: 0.35 });
-      const delay = new Tone.FeedbackDelay({ delayTime: '8n', feedback: 0.22, wet: 0.12 });
+      const reverb = new Tone.Reverb({ roomSize: ajustesAudio.reverb, wet: 0.3 });
+      const delay = new Tone.FeedbackDelay({ delayTime: '8n', feedback: 0.2, wet: 0.12 });
       master.chain(comp, limiter, Tone.Destination);
       fxRef.current = { reverb, delay, comp, limiter };
       masterRef.current = master;
@@ -128,6 +140,7 @@ const SintetizadorDeColores = () => {
         pad: makeBus(mixer.padDb),
         campanas: makeBus(mixer.campanasDb),
         ruido: makeBus(mixer.ruidoDb),
+        bateria: makeBus(mixer.bateriaDb),
       };
       Object.values(busesRef.current).forEach(bus => {
         bus.chain(fxRef.current.delay, fxRef.current.reverb, masterRef.current);
@@ -137,14 +150,8 @@ const SintetizadorDeColores = () => {
   };
 
   // ---------- Análisis de imagen ----------
+
   const analizarImagen = (file) => {
-    analyzeAbortRef.current.aborted = TrueIfReset(); // placeholder to keep code consistent
-  };
-
-  // Corrige placeholder anterior (evitar errores de pegado)
-  const TrueIfReset = () => false;
-
-  const analizarImagenReal = (file) => {
     // cancelar análisis anterior
     analyzeAbortRef.current.aborted = true;
     analyzeAbortRef.current = { aborted: false };
@@ -180,7 +187,7 @@ const SintetizadorDeColores = () => {
           if (h >= 120 && h <= 300) cool++; else warm++;
           if (s < 0.3 && l > 0.7) pastel++; else if (s > 0.7 || l < 0.3) bright++;
 
-          const grp = { h: Math.round(h/30)*30, s, l, weight: 1 };
+          const grp = { h: Math.round(h/15)*15, s, l, weight: 1 }; // más fino para drums
           const ex = grupos.find(gp => gp.h === grp.h);
           if (ex) { ex.weight++; ex.s = (ex.s + s)/2; ex.l = (ex.l + l)/2; }
           else grupos.push(grp);
@@ -195,7 +202,7 @@ const SintetizadorDeColores = () => {
         const brightness = count ? bright / count : 0;
 
         grupos.sort((a,b) => b.weight - a.weight);
-        const dominantes = grupos.slice(0, 8);
+        const dominantes = grupos.slice(0, 10);
         const uniqueHues = new Set(dominantes.map(c => c.h)).size;
         const entropia = dominantes.length ? uniqueHues / dominantes.length : 0.5;
 
@@ -248,8 +255,7 @@ const SintetizadorDeColores = () => {
 
   const seleccionarEscala = (d, color) => {
     if (d.pastelnessRatio > 0.35) return escalas.pastel;
-    if (d.brightnessRatio > 0.5) return escalas.brilhante || escalas.brilhante; // fallback typo safety
-    if (d.brightnessRatio > 0.5) return escalas.brilhante || escalas.brillante;
+    if (d.brightnessRatio > 0.5) return escalas.brillante;
     if (d.coolness > 0.65) return escalas.dorica;
     if (d.coolness < 0.35) return escalas.lidia;
     if (d.avgSaturation < 0.25) return escalas.pentMenor;
@@ -264,6 +270,9 @@ const SintetizadorDeColores = () => {
       await ensureAudioContext();
       setupGlobalAudio();
       limpiarVoces(); // conserva FX y buses
+
+      // Alinear BPM del transport para coherencia de duraciones tipo '8n', '16n'
+      Tone.Transport.bpm.rampTo(d.bpm, 0.1);
 
       // DRONE
       const ambient = new Tone.Synth({ oscillator:{ type:'sine' }, envelope:{ attack:2.5, decay:1.2, sustain:0.85, release:3.5 } });
@@ -294,17 +303,13 @@ const SintetizadorDeColores = () => {
       }
 
       // PAD (AMSynth)
-      const pad = new Tone.AMSynth({
-        oscillator: { type: 'sine' },
-        envelope: { attack: 1.5, decay: 1.2, sustain: 0.9, release: 4 }
-      });
+      const pad = new Tone.AMSynth({ oscillator:{ type:'sine' }, envelope:{ attack:1.5, decay:1.2, sustain:0.9, release:4 } });
       pad.chain(busesRef.current.pad);
       padRef.current = pad;
 
       // CAMPANAS (FMSynth)
       const bells = new Tone.FMSynth({
-        harmonicity: 8,
-        modulationIndex: 2,
+        harmonicity: 8, modulationIndex: 2,
         envelope: { attack: 0.01, decay: 1.2, sustain: 0.0, release: 2.5 },
         modulation: { type: 'sine' },
         modulationEnvelope: { attack: 0.01, decay: 0.2, sustain: 0 }
@@ -314,11 +319,35 @@ const SintetizadorDeColores = () => {
 
       // RUIDO (pink) con AutoFilter lento
       const noise = new Tone.Noise('pink');
-      const autoF = new Tone.AutoFilter(0.05, 200, 2).start(); // lento
-      const rf = new Tone.Filter({ frequency: 800, type:'lowpass' });
+      const autoF = new Tone.AutoFilter(0.06, 200, 2).start(); // lento
+      const rf = new Tone.Filter({ frequency: 900, type:'lowpass' });
       noise.chain(autoF, rf, busesRef.current.ruido);
       ruidoRef.current = { noise, autoFilter: autoF, filter: rf };
-      noise.start(); // muy bajo, controlarlo por el bus
+      noise.start(); // control por bus
+
+      // DRUMS (kick/snare/hats) muy leves
+      const kick = new Tone.MembraneSynth({ pitchDecay: 0.03, octaves: 6, oscillator: { type: 'sine' }, envelope: { attack: 0.001, decay: 0.5, sustain: 0, release: 0.4 } });
+      kick.chain(busesRef.current.bateria);
+      kickRef.current = kick;
+
+      const snare = new Tone.NoiseSynth({
+        noise: { type: 'white' },
+        envelope: { attack: 0.001, decay: 0.2, sustain: 0 }
+      });
+      const snareHP = new Tone.Filter({ type: 'highpass', frequency: 1800 });
+      snare.chain(snareHP, busesRef.current.bateria);
+      snareRef.current = snare;
+
+      const hat = new Tone.MetalSynth({
+        frequency: 250, envelope: { attack: 0.001, decay: 0.05, release: 0.01 },
+        harmonicity: 5.1, modulationIndex: 32, resonance: 3000, octaves: 1.5
+      });
+      hat.chain(busesRef.current.bateria);
+      hatRef.current = hat;
+
+      // Construir patrones de batería en base a colores fuertes
+      const patterns = construirPatronesBateria(d);
+      crearSecuenciasDrum(patterns);
 
       return true;
     } catch (e) {
@@ -327,7 +356,123 @@ const SintetizadorDeColores = () => {
     }
   };
 
-  // ---------- Loops ----------
+  // --- Patrones de batería a partir de colores ---
+
+  const construirPatronesBateria = (d) => {
+    const steps = 16;
+    const kick = Array(steps).fill(0);
+    const snare = Array(steps).fill(0);
+    const hat = Array(steps).fill(0);
+
+    // Determinar colores "fuertes" (no pastel, suficiente saturación y luz media)
+    const fuertes = d.dominantColors
+      .filter(c => c.s > 0.55 && c.l > 0.25 && c.l < 0.8)
+      .slice(0, 6);
+
+    const totalPeso = fuertes.reduce((acc, c) => acc + (c.weight || 1), 0) || 1;
+
+    // util: Euclidean rhythm
+    const euclid = (pulses, len, rot=0) => {
+      const pattern = Array(len).fill(0);
+      let bucket = 0;
+      for (let i=0;i<len;i++){
+        bucket += pulses;
+        if (bucket >= len) { bucket -= len; pattern[(i+rot)%len] = 1; }
+      }
+      return pattern;
+    };
+
+    const addPattern = (arr, pat, weight, vel=1) => {
+      for (let i=0;i<arr.length;i++) arr[i] += (pat[i] ? weight*vel : 0);
+    };
+
+    const rotFromHue = (h) => Math.floor(((h % 360) / 360) * steps) % steps;
+
+    fuertes.forEach(c => {
+      const w = (c.weight || 1) / totalPeso;
+      const rot = rotFromHue(c.h);
+      // Mapeo por grupos de color
+      if (c.h < 20 || c.h >= 340) {
+        // ROJO → patrones de bombo densos y directos (E(5,16))
+        addPattern(kick, euclid(5, steps, rot), w, 1.0);
+        addPattern(hat, euclid(7, steps, rot+2), w*0.5);
+      } else if (c.h < 50) {
+        // NARANJO → síncopa en snare (E(3,8) sobre 16) + kick ligero
+        const sn = euclid(3, 8, Math.floor(rot/2));
+        // expandir a 16
+        const sn16 = sn.flatMap(v => [v,0]);
+        addPattern(snare, sn16, w, 0.9);
+        addPattern(kick, euclid(3, steps, rot+1), w*0.5);
+      } else if (c.h < 90) {
+        // AMARILLO → hats con pulso estable (E(5,16))
+        addPattern(hat, euclid(5, steps, rot), w, 0.9);
+      } else if (c.h < 165) {
+        // VERDE → kick quebrado y hats entrecortados
+        addPattern(kick, euclid(4, steps, rot+1), w*0.8);
+        addPattern(hat, euclid(3, steps, rot+3), w*0.6);
+      } else if (c.h < 210) {
+        // CIAN → hats abiertos ocasionales (representados con mayor vel)
+        addPattern(hat, euclid(2, steps, rot+2), w*1.2);
+      } else if (c.h < 270) {
+        // AZUL → snare en 3 con fantasmas
+        const base = Array(steps).fill(0); base[4] = 1; base[12] = 1; // 2 y 4 en 16
+        addPattern(snare, base, w, 1.0);
+        addPattern(snare, euclid(2, steps, rot+5), w*0.4); // ghosts
+      } else {
+        // MORADO → contratiempos ligeros en hats
+        addPattern(hat, euclid(4, steps, rot+4), w*0.8);
+      }
+    });
+
+    // Normalizar y umbral para convertir en golpes discretos
+    const thresh = (arr, t) => arr.map(v => v >= t ? 1 : 0);
+
+    // El umbral depende de cuántos colores fuertes hay (menos colores → más fácil disparar)
+    const n = Math.max(1, fuertes.length);
+    const kT = 0.4 / Math.sqrt(n);
+    const sT = 0.45 / Math.sqrt(n);
+    const hT = 0.35 / Math.sqrt(n);
+
+    return {
+      kick: thresh(kick, kT),
+      snare: thresh(snare, sT),
+      hat: thresh(hat, hT),
+      // Velocidades suaves por defecto
+      velKick: kick.map(v => v ? 0.25 : 0),
+      velSnare: snare.map(v => v ? 0.18 : 0),
+      velHat: hat.map(v => v ? 0.12 : 0),
+    };
+  };
+
+  const crearSecuenciasDrum = ({kick, snare, hat, velKick, velSnare, velHat}) => {
+    // Limpiar secuencias previas
+    try { seqKickRef.current?.dispose?.(); } catch {}
+    try { seqSnareRef.current?.dispose?.(); } catch {}
+    try { seqHatRef.current?.dispose?.(); } catch {}
+    seqKickRef.current = null; seqSnareRef.current = null; seqHatRef.current = null;
+
+    // Crear Sequence con 16 pasos cada '16n'
+    seqKickRef.current = new Tone.Sequence((time, step) => {
+      if (!kickRef.current) return;
+      if (kick[step]) kickRef.current.triggerAttackRelease('C1', '8n', time, velKick[step] || 0.2);
+    }, Array.from({length:16}, (_,i)=>i), '16n');
+
+    seqSnareRef.current = new Tone.Sequence((time, step) => {
+      if (!snareRef.current) return;
+      if (snare[step]) snareRef.current.triggerAttackRelease('8n', time, velSnare[step] || 0.15);
+    }, Array.from({length:16}, (_,i)=>i), '16n');
+
+    seqHatRef.current = new Tone.Sequence((time, step) => {
+      if (!hatRef.current) return;
+      if (hat[step]) hatRef.current.triggerAttackRelease('16n', time, velHat[step] || 0.1);
+    }, Array.from({length:16}, (_,i)=>i), '16n');
+
+    seqKickRef.current.start(0);
+    seqSnareRef.current.start(0);
+    seqHatRef.current.start(0);
+  };
+
+  // ---------- Loops armónicos/ambient ----------
   const iniciarLoops = (d) => {
     if (loopColoresRef.current) { try { loopColoresRef.current.dispose(); } catch {} }
     if (loopPlucksRef.current) { try { loopPlucksRef.current.dispose(); } catch {} }
@@ -336,7 +481,6 @@ const SintetizadorDeColores = () => {
 
     const paso = Math.max(0.1, 60 / Math.max(30, d.bpm));
 
-    // Voces por color (ambient)
     loopColoresRef.current = new Tone.Loop((time) => {
       synthsRef.current.forEach((obj) => {
         const baseProb = 0.12 + (d.colorEntropy * 0.18);
@@ -355,7 +499,6 @@ const SintetizadorDeColores = () => {
     }, paso);
     loopColoresRef.current.start(0);
 
-    // Plucks sincopados
     const intervaloPluck = Math.max(0.18, 0.6 - d.avgBrightness*0.4);
     loopPlucksRef.current = new Tone.Loop((time) => {
       if (plucksRef.current.length === 0) return;
@@ -369,8 +512,7 @@ const SintetizadorDeColores = () => {
     }, intervaloPluck);
     loopPlucksRef.current.start(0);
 
-    // Pad: acordes esporádicos
-    const intervaloPad = 8; // s
+    const intervaloPad = 8;
     loopPadRef.current = new Tone.Loop((time) => {
       if (!padRef.current) return;
       if (Math.random() < 0.4) {
@@ -383,13 +525,12 @@ const SintetizadorDeColores = () => {
     }, intervaloPad);
     loopPadRef.current.start(0);
 
-    // Campanas: muy ocasionales
     const pasoCampanas = 2.5;
     loopCampanasRef.current = new Tone.Loop((time) => {
       if (!campanasRef.current) return;
       if (Math.random() < 0.08) {
         const escala = seleccionarEscala(d, { h: 240, s: d.avgSaturation });
-        const nota = escala[(Math.random()*escala.length)|0].replace('3','5'); // más agudo
+        const nota = escala[(Math.random()*escala.length)|0].replace('3','5');
         campanasRef.current.triggerAttackRelease(nota, '8n', time);
       }
     }, pasoCampanas);
@@ -403,7 +544,7 @@ const SintetizadorDeColores = () => {
     if (!file || !file.type.startsWith('image/')) return;
     setImagen(URL.createObjectURL(file));
     softStop(); // corta secuencias/voces anteriores
-    const analisis = await analizarImagenReal(file);
+    const analisis = await analizarImagen(file);
     if (!analisis) return;
     const ok = await setupAudioParaDatos(analisis);
     if (ok) {
@@ -446,30 +587,36 @@ const SintetizadorDeColores = () => {
   // ---------- Limpiezas ----------
 
   const softStop = () => {
+    // Ambient sequences
     try { loopColoresRef.current?.dispose?.(); loopColoresRef.current = null; } catch {}
     try { loopPlucksRef.current?.dispose?.(); loopPlucksRef.current = null; } catch {}
     try { loopPadRef.current?.dispose?.(); loopPadRef.current = null; } catch {}
     try { loopCampanasRef.current?.dispose?.(); loopCampanasRef.current = null; } catch {}
+    // Drum sequences
+    try { seqKickRef.current?.dispose?.(); seqKickRef.current = null; } catch {}
+    try { seqSnareRef.current?.dispose?.(); seqSnareRef.current = null; } catch {}
+    try { seqHatRef.current?.dispose?.(); seqHatRef.current = null; } catch {}
 
+    // Ambient instruments
     synthsRef.current.forEach(o => { try { o.synth.triggerRelease?.(); o.synth.dispose?.(); o.filter?.dispose?.(); } catch {} });
     synthsRef.current = [];
     plucksRef.current.forEach(pl => { try { pl.dispose?.(); } catch {} });
     plucksRef.current = [];
-
     if (ambientSynthRef.current) { try { ambientSynthRef.current.triggerRelease?.(); ambientSynthRef.current.dispose?.(); } catch {} ambientSynthRef.current = null; }
     if (padRef.current) { try { padRef.current.dispose?.(); } catch {} padRef.current = null; }
     if (campanasRef.current) { try { campanasRef.current.dispose?.(); } catch {} campanasRef.current = null; }
 
+    // Drum instruments
+    if (kickRef.current) { try { kickRef.current.dispose?.(); } catch {} kickRef.current = null; }
+    if (snareRef.current) { try { snareRef.current.dispose?.(); } catch {} snareRef.current = null; }
+    if (hatRef.current) { try { hatRef.current.dispose?.(); } catch {} hatRef.current = null; }
+
+    // Ruido
     if (ruidoRef.current.noise) { try { ruidoRef.current.noise.stop(); } catch {} }
     if (ruidoRef.current.autoFilter) { try { ruidoRef.current.autoFilter.dispose?.(); } catch {} }
     if (ruidoRef.current.filter) { try { ruidoRef.current.filter.dispose?.(); } catch {} }
     if (ruidoRef.current.noise) { try { ruidoRef.current.noise.dispose?.(); } catch {} }
     ruidoRef.current = { noise:null, autoFilter:null, filter:null };
-  };
-
-  const limpiarVoces = () => {
-    // Igual que softStop, pero mantenemos buses y FX
-    softStop();
   };
 
   const hardStopAndDispose = () => {
@@ -484,7 +631,7 @@ const SintetizadorDeColores = () => {
       if (masterRef.current) { masterRef.current.dispose(); masterRef.current = null; }
       if (busesRef.current) {
         Object.values(busesRef.current).forEach(b => { try { b.dispose?.(); } catch {} });
-        busesRef.current = { drone:null, colores:null, plucks:null, pad:null, campanas:null, ruido:null };
+        busesRef.current = { drone:null, colores:null, plucks:null, pad:null, campanas:null, ruido:null, bateria:null };
       }
     } catch {}
     setReproduciendo(false);
@@ -496,7 +643,7 @@ const SintetizadorDeColores = () => {
 
   const actualizarAjuste = (k, v) => {
     setAjustesAudio(p => ({ ...p, [k]: v }));
-    if (k === 'reverb' && fxRef.current.reverb) { try { fxRef.current.reverb.set({ roomSize: v, wet: 0.35 }); } catch {} }
+    if (k === 'reverb' && fxRef.current.reverb) { try { fxRef.current.reverb.set({ roomSize: v, wet: 0.3 }); } catch {} }
   };
 
   return (
@@ -526,12 +673,12 @@ const SintetizadorDeColores = () => {
                   <button onClick={() => { setImagen(null); setDatosColor(null); softStop(); if (fileInputRef.current) fileInputRef.current.value=''; if (currentImageUrlRef.current) { URL.revokeObjectURL(currentImageUrlRef.current); currentImageUrlRef.current=null; } }} className="w-full py-2 px-4 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors">Subir otra imagen</button>
                 </div>
               )}
-              <input ref={fileInputRef} type="file" accept="image/*" onChange={manejarSubidaImagen} className="hidden" />
+              <input ref={fileInputRef} type="file" accept="image/*" onChange={async (e)=>{ await manejarSubidaImagen(e); }} className="hidden" />
               <div className="mt-4">
                 <label className="block w-full py-3 px-6 bg-purple-600 hover:bg-purple-700 rounded-xl font-semibold transition-colors cursor-pointer text-center">
                   <Upload size={20} className="inline mr-2" />
                   Elegir archivo
-                  <input type="file" accept="image/*" onChange={manejarSubidaImagen} className="hidden" />
+                  <input type="file" accept="image/*" onChange={async (e)=>{ await manejarSubidaImagen(e); }} className="hidden" />
                 </label>
               </div>
             </div>
@@ -579,6 +726,7 @@ const SintetizadorDeColores = () => {
                     { key:'padDb', label:'Pad' },
                     { key:'campanasDb', label:'Campanas' },
                     { key:'ruidoDb', label:'Ruido' },
+                    { key:'bateriaDb', label:'Batería' },
                   ].map(({key,label}) => (
                     <div key={key}>
                       <label className="block text-sm text-slate-300 mb-2">{label}: {mixer[key]} dB</label>
@@ -634,7 +782,7 @@ const SintetizadorDeColores = () => {
                   <li><strong>Temperatura y saturación → escala musical</strong> (dórica, frígia, lidia, pentatónicas, whole, hirajoshi).</li>
                   <li><strong>Entropía de color → densidad base</strong> (más entropía, más eventos moderados).</li>
                   <li><strong>Contraste → timbre</strong> mediante modulación de filtros.</li>
-                  <li><strong>Pastel/brillante → envolventes y selección de escala</strong>.</li>
+                  <li><strong>Colores fuertes → ritmos</strong>: rojos, verdes, azules, naranjos, etc. aportan patrones coherentes en bombo/caja/hi-hat.</li>
                 </ul>
                 <p className="text-slate-400 text-xs mt-3">La app prioriza texturas calmas: las probabilidades son bajas para evitar acumulación y clipping.</p>
               </div>
