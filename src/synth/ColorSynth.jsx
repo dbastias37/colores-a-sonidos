@@ -39,6 +39,9 @@ export default function ColorSynth(){
   const [err, setErr] = useState(null)
   const [showHelp, setShowHelp] = useState(false)
 
+  const [imgRatio, setImgRatio] = useState(16/9)   // ratio por defecto
+  const imgBoxRef = useRef(null)
+
   const mood = data ? (data.coolness < 0.5 ? 'feliz' : 'triste') : 'feliz'
   const scale = data ? chooseScale(mood, data) : []
   const strong = data ? data.dominantColors.filter(c=>c.s>.55 && c.l>.25 && c.l<.8) : []
@@ -111,6 +114,19 @@ export default function ColorSynth(){
     setDb(B.drone, mix.drone)
     setDb(B.pad, mix.pad)
   },[mix])
+
+  useEffect(() => {
+    const box = imgBoxRef.current
+    if (!box) return
+    const supportsAspect = CSS?.supports?.('aspect-ratio: 1') ?? true
+    if (supportsAspect) return
+    const ro = new ResizeObserver(() => {
+      const w = box.clientWidth || 0
+      box.style.height = w ? `${w / (imgRatio || (16/9))}px` : ''
+    })
+    ro.observe(box)
+    return () => ro.disconnect()
+  }, [imgRatio])
 
   const setupAudioGraph = () => {
     if (fx.current.master) return
@@ -306,6 +322,13 @@ export default function ColorSynth(){
 
 
   // ---------- UI actions ----------
+  const onImgLoad = (e) => {
+    const w = e.target.naturalWidth || 1
+    const h = e.target.naturalHeight || 1
+    const r = Math.max(0.1, Math.min(10, w / h))
+    setImgRatio(r)
+  }
+
   const onUpload = async (e)=>{
     const f = e.target.files?.[0]; if (!f||!f.type.startsWith('image/')) return
     if (imgURL) URL.revokeObjectURL(imgURL)
@@ -460,7 +483,9 @@ export default function ColorSynth(){
               </div>
             ):(
               <div>
-                <div className="imgBox"><img className="img" src={imgURL} alt="subida"/></div>
+                <div ref={imgBoxRef} className="imgBox" style={{ '--ratio': imgRatio }}>
+                  <img className="img" src={imgURL} alt="subida" onLoad={onImgLoad}/>
+                </div>
                 <div className="row" style={{marginTop:10}}>
                   <button className="btn secondary" onClick={()=>{ if(imgURL) URL.revokeObjectURL(imgURL); setImgURL(null); setData(null); stopAll(); stopViz(); if(fileRef.current) fileRef.current.value='' }}>Subir otra</button>
                   {/* Visual se maneja automáticamente al reproducir/detener */}

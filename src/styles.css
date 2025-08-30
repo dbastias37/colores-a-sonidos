@@ -9,8 +9,42 @@ body{font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Helvetica,
 .preboot{position:fixed;inset:0;display:grid;place-items:center;font-weight:700;letter-spacing:.3px;color:#a5b4fc;background:radial-gradient(800px 600px at 50% 0%, #182044 0%, rgba(11,16,32,.96) 60%);z-index:9999}
 .noscript{position:fixed;inset:0;display:grid;place-items:center;background:#0b1020;color:#fff;z-index:9999}
 
-.imgBox{ width:100%; aspect-ratio:16/9; background:rgba(0,0,0,.18); border:1px solid #374151; border-radius:10px; overflow:hidden; display:grid; place-items:center; }
-.img { width:100%; height:100%; object-fit: contain; display:block; }
+
+/* Contenedor que adopta el ratio real de la foto */
+.imgBox{
+  width: 100%;
+  /* ratio viene de inline style: '--ratio' */
+  aspect-ratio: var(--ratio, 16/9);
+  /* limita altura para que no “crezca infinito” en portrait */
+  max-height: min(70vh, 640px);
+  height: auto;
+
+  background: rgba(0,0,0,.18);
+  border: 1px solid #374151;
+  border-radius: 10px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+/* La imagen se escala para caber SIEMPRE completa (letterboxing si hace falta) */
+.img{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  image-rendering: auto;
+}
+
+/* Responsive: en móviles, deja un poco más de altura disponible */
+@media (max-width: 640px){
+  .imgBox{ max-height: 74vh; }
+}
+
+/* Fallback para navegadores sin aspect-ratio (el JS arriba ajusta height) */
+@supports not (aspect-ratio: 1) {
+  .imgBox{ height: auto; }
+}
 
 /* Portal de fondo para el visualizador */
 #bg-viz-portal{ position:fixed; inset:0; z-index:-1; pointer-events:none; }
