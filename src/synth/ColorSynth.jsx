@@ -9,15 +9,46 @@ const PERF = { LOOK_AHEAD: 0.05, MAX_EVENTS_PER_TICK: 10, MAX_SYNTH_VOICES: 8, I
 const hsl = (h,s,l)=>`hsl(${h}, ${Math.round(s*100)}%, ${Math.round(l*100)}%)`
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v))
 
+const SCALES = {
+  feliz: {
+    ionian:   ['C3','D3','E3','F3','G3','A3','B3','C4'],
+    lydian:   ['C3','D3','E3','F#3','G3','A3','B3','C4']
+  },
+  triste: {
+    aeolian:  ['C3','D3','Eb3','F3','G3','Ab3','Bb3','C4'],
+    dorian:   ['C3','D3','Eb3','F3','G3','A3','Bb3','C4']
+  }
+}
+
+function chooseScale(m, d) {
+  if (m==='feliz') return d.avgBrightness>0.55 ? SCALES.feliz.lydian : SCALES.feliz.ionian
+  return d.avgSaturation>0.45 ? SCALES.triste.dorian : SCALES.triste.aeolian
+}
+
+function noteForColor(h, scaleArr){
+  if (!scaleArr?.length) return '—'
+  const idx = Math.floor((h % 360) / (360/scaleArr.length))
+  return scaleArr[idx]
+}
+
 export default function ColorSynth(){
   const [imgURL, setImgURL] = useState(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [data, setData] = useState(null)
   const [playing, setPlaying] = useState(false)
   const [err, setErr] = useState(null)
+  const [showHelp, setShowHelp] = useState(false)
+
+  const mood = data ? (data.coolness < 0.5 ? 'feliz' : 'triste') : 'feliz'
+  const scale = data ? chooseScale(mood, data) : []
+  const strong = data ? data.dominantColors.filter(c=>c.s>.55 && c.l>.25 && c.l<.8) : []
+  const uniqueHues = strong.length ? new Set(strong.map(c=>c.h)).size : 0
+  const richness = data ? uniqueHues / Math.max(1, data.dominantColors.length) : 0
+  const energy = data ? Math.min(1, 0.4 + data.avgSaturation*0.4 + richness*0.6) : 0
+  const caracter = energy > 0.65 ? 'estruendoso' : 'calmo'
 
   // mixer
-  const [mix, setMix] = useState({ drone:-20, colors:-12, plucks:-14, pad:-16, bells:-16, noise:-28, drums:-14 })
+  const [mix, setMix] = useState({ drone:-18, pad:-14 })
 
   const fileRef = useRef(null)
   const canvasRef = useRef(null)
@@ -25,31 +56,13 @@ export default function ColorSynth(){
   const abortRef = useRef({aborted:false})
   const wasPlayingRef = useRef(false)
 
-  const countsRef = useRef({ total:0, colores:0, plucks:0, pad:0, bells:0, drums:0 })
-  const [counts, setCounts] = useState({ total:0, colores:0, plucks:0, pad:0, bells:0, drums:0 })
-  const flushCounts = ()=>{ setCounts({...countsRef.current}) }
-
-  const noteHit = (kind) => {
-    const c = countsRef.current
-    c.total += 1
-    if (kind && c[kind] !== undefined) c[kind] += 1
-    if (!noteHit._raf) {
-      noteHit._raf = requestAnimationFrame(()=>{ flushCounts(); noteHit._raf = null })
-    }
-  }
-
   // audio nodes/buses
   const fx = useRef({})
   const buses = useRef({})
   const ambient = useRef(null)
-  const voices = useRef([])
-  const plucks = useRef([])
   const pad = useRef(null)
-  const bells = useRef(null)
-  const noise = useRef(null)
-  const kick = useRef(null); const snare = useRef(null); const hat = useRef(null)
-  const loopColors = useRef(null); const loopPlucks = useRef(null); const loopPad = useRef(null); const loopBells = useRef(null)
-  const seqK = useRef(null); const seqS = useRef(null); const seqH = useRef(null)
+  const padLoop = useRef(null)
+  const arpLoop = useRef(null)
 
   // viz
   // --- Visual autónomo: orbes por paleta ---
@@ -95,13 +108,8 @@ export default function ColorSynth(){
     const B = buses.current
     const setDb = (g,db)=>g?.gain?.rampTo(Tone.dbToGain(db),0.05)
     if (!B.drone) return
-    setDb(B.drone,mix.drone)
-    setDb(B.colors,mix.colors)
-    setDb(B.plucks,mix.plucks)
-    setDb(B.pad,mix.pad)
-    setDb(B.bells,mix.bells)
-    setDb(B.noise,mix.noise)
-    setDb(B.drums,mix.drums)
+    setDb(B.drone, mix.drone)
+    setDb(B.pad, mix.pad)
   },[mix])
 
   const setupAudioGraph = () => {
@@ -112,10 +120,9 @@ export default function ColorSynth(){
     const limiter = new Tone.Limiter(-1)
     master.chain(makeup, comp, limiter, Tone.Destination)
     fx.current = { master, makeup, comp, limiter, reverb: new Tone.Reverb({roomSize:.32, wet:.30}), delay: new Tone.FeedbackDelay({delayTime:'8n', feedback:.20, wet:.12}) }
-    const makeBus = (db)=> new Tone.Gain(Tone.dbToGain(db))
     buses.current = {
-      drone: makeBus(mix.drone), colors: makeBus(mix.colors), plucks: makeBus(mix.plucks),
-      pad: makeBus(mix.pad), bells: makeBus(mix.bells), noise: makeBus(mix.noise), drums: makeBus(mix.drums)
+      drone: new Tone.Gain(Tone.dbToGain(mix.drone)),
+      pad:   new Tone.Gain(Tone.dbToGain(mix.pad))
     }
     Object.values(buses.current).forEach(b => b.chain(fx.current.delay, fx.current.reverb, fx.current.master))
   }
@@ -139,7 +146,7 @@ export default function ColorSynth(){
 
       const stats = extractStats(ctx, canvas.width, canvas.height, local)
       const extra = pickHighlights(ctx, canvas.width, canvas.height, stats.dominantColors, local)
-      const merged = (stats.dominantColors.concat(extra)).slice(0,14)
+      const merged = (stats.dominantColors.concat(extra)).slice(0, 20) // más colores
       const bpm = Math.round(60 + stats.avgBrightness*100)
       const swing = Math.min(.35, Math.max(0, stats.avgSaturation*.3))
       Tone.Transport.swing = swing; Tone.Transport.swingSubdivision='8n'
@@ -164,7 +171,7 @@ export default function ColorSynth(){
 
   const extractStats = (ctx,w,h,local)=>{
     const data = ctx.getImageData(0,0,w,h).data
-    const stride = PERF.SAMPLE_STRIDE*4
+    const stride = Math.max(8, Math.floor(PERF.SAMPLE_STRIDE*2)) * 4  // muestreo más denso
     const bins = new Map()
     let TB=0, TS=0, C=0, cool=0, warm=0, pastel=0, bright=0
     for (let i=0;i<data.length;i+=stride){
@@ -175,7 +182,7 @@ export default function ColorSynth(){
       TB+=l; TS+=s; C++
       if (sH>=120 && sH<=300) cool++; else warm++
       if (s<.3 && l>.7) pastel++; else if (s>.7 || l<.3) bright++
-      const k = Math.round(sH/12)*12
+      const k = Math.round(sH/6)*6    // bins de 6°
       const e = bins.get(k)
       if (e) { e.weight++; e.s=(e.s+s)/2; e.l=(e.l+l)/2 }
       else bins.set(k,{h:k,s,l,weight:1})
@@ -195,14 +202,14 @@ export default function ColorSynth(){
 
   const pickHighlights = (ctx,w,h,existing,local)=>{
     const data = ctx.getImageData(0,0,w,h).data
-    const stride = PERF.SAMPLE_STRIDE*8
+    const stride = PERF.SAMPLE_STRIDE*4
     const out = []; const used = new Set(existing.map(c=>c.h))
     for (let i=0;i<data.length;i+=stride){
       if (local.aborted) break
       const a=data[i+3]; if (a===0) continue
       const r=data[i],g=data[i+1],b=data[i+2]
       const {h,s,l} = rgbToHsl(r,g,b)
-      if (l>.78 && s>.55){ const k=Math.round(h/12)*12; if(!used.has(k)){ used.add(k); out.push({h:k,s,l,weight:1}); if(out.length>=4) break } }
+      if ((l>.75 && s>.5) || (l>.6 && s>.75)) { const k=Math.round(h/12)*12; if(!used.has(k)){ used.add(k); out.push({h:k,s,l,weight:1}); if(out.length>=8) break } }
     }
     return out
   }
@@ -223,186 +230,80 @@ export default function ColorSynth(){
     return {h:h*360, s, l}
   }
 
-  // ---------- Audio ----------
-  const scales = {
-    frio:['C3','D3','Eb3','F3','G3','Ab3','Bb3','C4'],
-    calido:['C3','D3','E3','F#3','G3','A3','B3','C4'],
-    pastel:['C3','E3','G3','B3','D4','F#4'],
-    brillante:['C3','D#3','F#3','A3','C4','D#4','F#4'],
-    dorica:['C3','D3','Eb3','F3','G3','A3','Bb3','C4'],
-    frigia:['C3','Db3','Eb3','F3','G3','Ab3','Bb3','C4'],
-    lidia:['C3','D3','E3','F#3','G3','A3','B3','C4'],
-    whole:['C3','D3','E3','F#3','G#3','A#3','C4'],
-    hira:['C3','Db3','F3','G3','Ab3','C4'],
-    pmen:['C3','Eb3','F3','G3','Bb3','C4'],
-    pmay:['C3','D3','E3','G3','A3','C4']
-  }
-
-  const chooseScale = (d, c)=>{
-    if (d.pastelnessRatio>.35) return scales.pastel
-    if (d.brightnessRatio>.5) return scales.brillante
-    if (d.coolness>.65) return scales.dorica
-    if (d.coolness<.35) return scales.lidia
-    if (d.avgSaturation<.25) return scales.pmen
-    if (c.h%60===0) return scales.whole
-    if (c.h%90===0) return scales.hira
-    return (c.s>.6) ? scales.pmay : scales.frio
-  }
-
   const setupFromData = async (d)=>{
     try{
       setErr(null)
-      await Tone.start() // user gesture required; call only on play
+      await Tone.start()
       setupAudioGraph()
 
       softStop()
+
+      const mood = (d.coolness < 0.5) ? 'feliz' : 'triste'
+      const strong = d.dominantColors.filter(c=>c.s>.55 && c.l>.25 && c.l<.8)
+      const uniqueHues = new Set(strong.map(c=>c.h)).size
+      const richness = uniqueHues / Math.max(1, d.dominantColors.length)
+      const energy = Math.min(1, 0.4 + d.avgSaturation*0.4 + richness*0.6)
 
       Tone.Transport.bpm.rampTo(d.bpm, .15)
       Tone.Transport.swing = Math.min(.35, Math.max(0, d.avgSaturation*.3))
       Tone.Transport.swingSubdivision = '8n'
 
-      ambient.current = new Tone.Synth({oscillator:{type:'sine'}, envelope:{attack:2.2,decay:1.1,sustain:.85,release:3.2}})
-      const lp = new Tone.Filter({frequency:1100,type:'lowpass'})
+      ambient.current = new Tone.Synth({
+        oscillator:{ type:'sine' },
+        envelope:{ attack:2.5, decay:1.2, sustain:.9, release:3.5 }
+      })
+      const lp = new Tone.Filter({ frequency: 900 + energy*600, type:'lowpass' })
       ambient.current.chain(lp, buses.current.drone)
-      ambient.current.volume.value = -20
-      ambient.current.triggerAttack('C2')
+      ambient.current.volume.value = -18
+      ambient.current.triggerAttack((mood==='feliz')?'C2':'G1')
 
-      const nVoices = Math.min(PERF.MAX_SYNTH_VOICES, d.dominantColors.length)
-      for (let i=0;i<nVoices;i++){
-        const color = d.dominantColors[i]
-        const scale = chooseScale(d,color)
-        const s = new Tone.Synth({oscillator:{type:'triangle'}, envelope:{attack:.22,decay:.55,sustain:.42,release:1}})
-        const ft = new Tone.Filter({frequency:880,type:'lowpass'})
-        const trem = new Tone.Tremolo(.5 + d.avgSaturation*1.2, .18).start()
-        s.chain(ft, trem, buses.current.colors)
-        s.volume.value = -20 - i*1.5
-        voices.current.push({s, ft, color, scale})
+      const padVoices = Math.round(4 + energy*2)
+      pad.current = new Tone.PolySynth(Tone.AMSynth, {
+        maxPolyphony: padVoices,
+        volume: Tone.gainToDb(0.4),
+        options: { envelope:{ attack:1.2, decay:1, sustain:.9, release:4.2 } }
+      }).connect(buses.current.pad)
+
+      const scale = chooseScale(mood, d)
+      const hueToDegree = h => Math.floor((h % 360) / (360/scale.length))
+      const rootIdx = hueToDegree(d.dominantColors[0]?.h || 0)
+      const root = Tone.Frequency(scale[rootIdx]).toNote()
+
+      function chordFrom(rootNote, m, e) {
+        const f = Tone.Frequency(rootNote)
+        const intervals = (m==='feliz')
+          ? [0, 4, 7, (e>.6? 11:9)]        // maj7 / add9
+          : [0, 3, 7, (e>.6? 10:9)]        // min7 / add9
+        if (Math.random()<.5) intervals[0] -= 12
+        if (Math.random()<.35) intervals.push(14) // add 6th/13th
+        return intervals.map(semi => f.transpose(semi).toNote())
       }
 
-      for (let i=0;i<2;i++){
-        const p = new Tone.PluckSynth({attackNoise:1, dampening:3200, resonance:.85})
-        const pan = new Tone.AutoPanner(0.1 + i*0.05).start()
-        p.chain(pan, buses.current.plucks)
-        p.volume.value = -24 - i*2
-        plucks.current.push(p)
-      }
+      padLoop.current?.dispose?.()
+      padLoop.current = new Tone.Loop((time)=>{
+        const base = chordFrom(root, mood, energy)
+        const alt = d.dominantColors[1]?.h
+        const shift = alt ? ((alt%120)<60 ? 0 : 2) : 0
+        const chord = base.map(n => Tone.Frequency(n).transpose(shift).toNote())
+        chord.forEach(n=>{
+          const nudge = (Math.random()-.5)*0.03
+          pad.current.triggerAttackRelease(n, '2n', time+nudge, 0.7)
+        })
+      }, Math.max(5.5, 9 - energy*4)).start(0)
 
-      pad.current = new Tone.AMSynth({oscillator:{type:'sine'}, envelope:{attack:1.3,decay:1.1,sustain:.9,release:3.5}}).connect(buses.current.pad)
-      bells.current = new Tone.FMSynth({harmonicity:8,modulationIndex:2,envelope:{attack:0.01,decay:1,sustain:0,release:2.2},modulation:{type:'sine'},modulationEnvelope:{attack:0.01,decay:0.2,sustain:0}}).connect(buses.current.bells)
-      noise.current = new Tone.Noise('pink')
-      const af = new Tone.AutoFilter(0.06, 200, 2).start()
-      const rf = new Tone.Filter({frequency:850,type:'lowpass'})
-      noise.current.chain(af, rf, buses.current.noise); noise.current.start()
+      arpLoop.current?.dispose?.()
+      arpLoop.current = new Tone.Loop((time)=>{
+        const base = chordFrom(root, mood, energy)
+        const n = base[(Math.random()*base.length)|0]
+        const durn = (Math.random()<.5)?'8n':'4n'
+        const nudge = (Math.random()-.5)*0.02
+        pad.current.triggerAttackRelease(n, durn, time+nudge, 0.45)
+      }, Math.max(.28, .5 - energy*.25)).start(0)
 
-      kick.current = new Tone.MembraneSynth({pitchDecay:0.03,octaves:6,oscillator:{type:'sine'},envelope:{attack:0.001,decay:0.45,sustain:0,release:0.35}}).connect(buses.current.drums)
-      snare.current = new Tone.NoiseSynth({noise:{type:'white'}, envelope:{attack:0.001,decay:0.18,sustain:0}}); const shp=new Tone.Filter({type:'highpass',frequency:1900}); snare.current.chain(shp, buses.current.drums)
-      hat.current = new Tone.MetalSynth({frequency:250,envelope:{attack:0.001,decay:0.045,release:0.008},harmonicity:5.1,modulationIndex:32,resonance:2600,octaves:1.5}).connect(buses.current.drums)
-
-      const patt = buildDrums(d)
-      makeDrumSeq(patt)
-
-      startLoops(d)
       return true
     }catch(e){ setErr(e.message||String(e)); return false }
   }
 
-  const buildDrums = (d)=>{
-    const steps = 16
-    const K=Array(steps).fill(0), S=Array(steps).fill(0), H=Array(steps).fill(0)
-    const strong = d.dominantColors.filter(c=>c.s>.55 && c.l>.25 && c.l<.8).slice(0,8)
-    const total = strong.reduce((a,c)=>a+(c.weight||1),0)||1
-    const euclid=(pulses,len,rot=0)=>{ const out=Array(len).fill(0); let buck=0; for(let i=0;i<len;i++){ buck+=pulses; if(buck>=len){ buck-=len; out[(i+rot)%len]=1 } } return out }
-    const add=(arr,pat,w,vel=1)=>{ for(let i=0;i<arr.length;i++) arr[i]+= (pat[i]? w*vel:0) }
-    const rot=(h)=>Math.floor(((h%360)/360)*steps)%steps
-    strong.forEach(c=>{
-      const w=(c.weight||1)/total; const r=rot(c.h)
-      if (c.h<20||c.h>=340){ add(K,euclid(5,steps,r),w,1); add(H,euclid(7,steps,r+2),w*.5) }
-      else if (c.h<50){ const sn=euclid(3,8,Math.floor(r/2)).flatMap(v=>[v,0]); add(S,sn,w,.9); add(K,euclid(3,steps,r+1),w*.5) }
-      else if (c.h<90){ add(H,euclid(5,steps,r),w,.9) }
-      else if (c.h<165){ add(K,euclid(4,steps,r+1),w*.8); add(H,euclid(3,steps,r+3),w*.6) }
-      else if (c.h<210){ add(H,euclid(2,steps,r+2),w*1.2) }
-      else if (c.h<270){ const base=Array(steps).fill(0); base[4]=1; base[12]=1; add(S,base,w,1); add(S,euclid(2,steps,r+5),w*.4) }
-      else { add(H,euclid(4,steps,r+4),w*.8) }
-    })
-    const thr = (arr,t)=>arr.map(v=>v>=t?1:0)
-    const n=Math.max(1,strong.length)
-    const tK= .42/(Math.sqrt(n)+.2), tS=.48/(Math.sqrt(n)+.2), tH=.36/(Math.sqrt(n)+.2)
-    return {K:thr(K,tK),S:thr(S,tS),H:thr(H,tH), vK:K.map(v=>v ? .22 : 0), vS:S.map(v=>v ? .16 : 0), vH:H.map(v=>v ? .1 : 0)}
-  }
-
-  const makeDrumSeq = ({K,S,H,vK,vS,vH})=>{
-    try{ seqK.current?.dispose?.(); seqS.current?.dispose?.(); seqH.current?.dispose?.(); }catch{}
-    seqK.current = new Tone.Sequence((t,step)=>{ if(K[step]) { kick.current?.triggerAttackRelease('C1','8n',t,vK[step]||.2); noteHit('drums'); emit(0, .6, .35, .6) } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
-    seqS.current = new Tone.Sequence((t,step)=>{ if(S[step]) { snare.current?.triggerAttackRelease('8n',t,vS[step]||.15); noteHit('drums'); emit(220,.6,.6,.55) } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
-    seqH.current = new Tone.Sequence((t,step)=>{ if(H[step]) { hat.current?.triggerAttackRelease('16n',t,vH[step]||.1); noteHit('drums'); emit(55,.7,.7,.28) } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
-  }
-
-  const startLoops = (d)=>{
-    loopColors.current?.dispose?.(); loopPlucks.current?.dispose?.(); loopPad.current?.dispose?.(); loopBells.current?.dispose?.()
-    const step = Math.max(.10, 60/Math.max(35,d.bpm))
-    loopColors.current = new Tone.Loop((time)=>{
-      let ev=0
-      voices.current.forEach(v=>{
-        if (ev>=PERF.MAX_EVENTS_PER_TICK) return
-        const base = .18 + (d.colorEntropy*.22)
-        const weight = Math.min(1,(v.color.weight||1)/20)
-        const sat = .22 + v.color.s*.7
-        if (Math.random() < base*weight*sat) {
-          const idx = (Math.random()*v.scale.length)|0
-          let note = v.scale[idx]
-          if (v.color.h<60) note = Tone.Frequency(note).transpose(12).toNote()
-          else if (v.color.h>240) note = Tone.Frequency(note).transpose(-12).toNote()
-          const dur = ['8n','4n','2n'][(Math.random()*3)|0]
-          const baseF = 230 + v.color.h*2
-          const varP = (Math.random()-.5)*d.contrast*35
-          v.ft.frequency.rampTo(clamp(baseF+varP,180,3200), .06)
-          const nudge = (Math.random()-.5)*.02
-          v.s.triggerAttackRelease(note, dur, time+nudge)
-          noteHit('colores')
-          emit(v.color.h, v.color.s, v.color.l, .5)
-          ev++
-        }
-      })
-    }, step).start(0)
-
-    const intPl = Math.max(.16, .50 - d.avgBrightness*.35)
-    loopPlucks.current = new Tone.Loop((time)=>{
-      if (plucks.current.length===0) return
-      if (Math.random() < (.14 + d.colorEntropy*.18)) {
-        const i=(Math.random()*plucks.current.length)|0
-        const sc = chooseScale(d, {h:60*(1+i), s:d.avgSaturation})
-        const note = sc[(Math.random()*sc.length)|0].replace('3','4')
-        const nudge=(Math.random()-.5)*.02
-        plucks.current[i].triggerAttack(note, time+nudge)
-        noteHit('plucks')
-        emit(120+i*60, .5, .6, .45)
-      }
-    }, intPl).start(0)
-
-    loopPad.current = new Tone.Loop((time)=>{
-      if (!pad.current) return
-      if (Math.random() < .50){
-        const sc = chooseScale(d, {h:120, s:d.avgSaturation})
-        const root = sc[(Math.random()*sc.length)|0]
-        const fifth = Tone.Frequency(root).transpose(7).toNote()
-        pad.current.triggerAttackRelease(root,'2n',time)
-        if (Math.random()<.55) pad.current.triggerAttackRelease(fifth,'2n',time+.08)
-        noteHit('pad')
-        emit(d.coolness>.5?180:30,.3,.5,.55)
-      }
-    }, 8.5).start(0)
-
-    loopBells.current = new Tone.Loop((time)=>{
-      if (!bells.current) return
-      if (Math.random() < .12){
-        const sc = chooseScale(d, {h:240, s:d.avgSaturation})
-        const note = sc[(Math.random()*sc.length)|0].replace('3','5')
-        bells.current.triggerAttackRelease(note, '8n', time)
-        noteHit('bells')
-        emit(260,.5,.7,.5)
-      }
-    }, 2.8).start(0)
-  }
 
   // ---------- UI actions ----------
   const onUpload = async (e)=>{
@@ -410,8 +311,6 @@ export default function ColorSynth(){
     if (imgURL) URL.revokeObjectURL(imgURL)
     setImgURL(URL.createObjectURL(f))
     stopAll()
-    countsRef.current = { total:0, colores:0, plucks:0, pad:0, bells:0, drums:0 }
-    setCounts(countsRef.current)
     const d = await analyzeImage(f); if (!d) return
   }
 
@@ -428,24 +327,10 @@ export default function ColorSynth(){
 
   // cleanup helpers
   const stopAll = ()=>{
-    try{ loopColors.current?.dispose?.(); loopColors.current=null }catch{}
-    try{ loopPlucks.current?.dispose?.(); loopPlucks.current=null }catch{}
-    try{ loopPad.current?.dispose?.(); loopPad.current=null }catch{}
-    try{ loopBells.current?.dispose?.(); loopBells.current=null }catch{}
-    try{ seqK.current?.dispose?.(); seqK.current=null }catch{}
-    try{ seqS.current?.dispose?.(); seqS.current=null }catch{}
-    try{ seqH.current?.dispose?.(); seqH.current=null }catch{}
-    voices.current.forEach(v=>{ try{ v.s.triggerRelease?.(); v.s.dispose?.(); v.ft?.dispose?.() }catch{} })
-    voices.current=[]; plucks.current.forEach(p=>{try{p.dispose?.()}catch{}}); plucks.current=[]
+    try{ padLoop.current?.dispose?.(); padLoop.current=null }catch{}
+    try{ arpLoop.current?.dispose?.(); arpLoop.current=null }catch{}
     if (ambient.current){ try{ ambient.current.triggerRelease?.(); ambient.current.dispose?.() }catch{}; ambient.current=null }
     if (pad.current){ try{ pad.current.dispose?.() }catch{}; pad.current=null }
-    if (bells.current){ try{ bells.current.dispose?.() }catch{}; bells.current=null }
-    if (kick.current){ try{ kick.current.dispose?.() }catch{}; kick.current=null }
-    if (snare.current){ try{ snare.current.dispose?.() }catch{}; snare.current=null }
-    if (hat.current){ try{ hat.current.dispose?.() }catch{}; hat.current=null }
-    if (noise.current){ try{ noise.current.stop(); noise.current.dispose?.() }catch{}; noise.current=null }
-    countsRef.current = { total:0, colores:0, plucks:0, pad:0, bells:0, drums:0 }
-    setCounts(countsRef.current)
   }
   const softStop = ()=> stopAll()
   const hardStop = ()=>{ stopAll(); try{ Tone.Transport.stop(); Tone.Transport.cancel(0) }catch{}; stopViz(); if(preUrlRef.current){ URL.revokeObjectURL(preUrlRef.current); preUrlRef.current=null } }
@@ -458,6 +343,9 @@ export default function ColorSynth(){
     const PI2 = Math.PI * 2
     cancelAnimationFrame(rafRef.current)
     particlesRef.current.length = 0
+    if (data?.dominantColors) {
+      data.dominantColors.forEach(c=>emit(c.h, c.s, c.l, 0.6))
+    }
 
     const loop = (ts) => {
       const { w, h } = sizeRef.current
@@ -470,6 +358,11 @@ export default function ColorSynth(){
       const windXBase = Math.sin(t) * 0.15
       const windYBase = Math.cos(t * 0.8) * 0.10
       const speedScale = 1.05
+
+      if (data?.dominantColors && Math.random() < 0.08) {
+        const c = data.dominantColors[(Math.random()*data.dominantColors.length)|0]
+        emit(c.h, c.s, c.l, 0.5)
+      }
 
       for (let i = particlesRef.current.length - 1; i >= 0; i--) {
         const p = particlesRef.current[i]
@@ -552,7 +445,8 @@ export default function ColorSynth(){
     <div className="container">
       <header className="header">
         <h1 className="h1">Sintetizador de Colores</h1>
-        <p className="p">Convierte tus imágenes en sonido ambiental. Primero sube una imagen y luego toca “Probar audio” o “Reproducir”.</p>
+        <p className="p">Convierte tus imágenes en sonido ambiental…</p>
+        <button className="btn secondary" onClick={()=>setShowHelp(true)}>¿Cómo funciona?</button>
       </header>
 
       <section className="grid">
@@ -584,9 +478,6 @@ export default function ColorSynth(){
                 <button className={"btn "+(playing?'red':'')} onClick={togglePlay}>{playing? <><Pause size={18}/> Detener</> : <><Play size={18}/> Reproducir</>}</button>
               </div>
               <div className="small">BPM: {data.bpm} • Brillo: {Math.round(data.avgBrightness*100)}% • Saturación: {Math.round(data.avgSaturation*100)}%</div>
-              <div className="small" style={{marginTop:6}}>
-                Notas: <strong>{counts.total}</strong> — Colores: {counts.colores} • Plucks: {counts.plucks} • Pad: {counts.pad} • Campanas: {counts.bells} • Drums: {counts.drums}
-              </div>
               <div className="row" style={{flexWrap:'wrap', marginTop:8, gap:12}}>
                 {Object.entries(mix).map(([k,v])=>(
                   <div key={k} style={{minWidth:200}}>
@@ -601,15 +492,33 @@ export default function ColorSynth(){
 
         <div className="grid-2">
           {data ? (
-            <div className="card">
-              <h3>Análisis</h3>
-              <div className="small">Frialdad: {Math.round(data.coolness*100)}% • Pastel: {Math.round(data.pastelnessRatio*100)}% • Contraste: {Math.round(data.contrast*100)}% • Entropía: {Math.round(data.colorEntropy*100)}%</div>
-              <div className="colors" style={{marginTop:10}}>
-                {data.dominantColors.slice(0,12).map((c,i)=>(<div key={i} title={`h:${c.h} s:${Math.round(c.s*100)} l:${Math.round(c.l*100)}`} className="colorSwatch" style={{background:hsl(c.h,c.s,c.l)}}/>))}
+            <>
+              <div className="card">
+                <h3>Análisis</h3>
+                <div className="small">Frialdad: {Math.round(data.coolness*100)}% • Pastel: {Math.round(data.pastelnessRatio*100)}% • Contraste: {Math.round(data.contrast*100)}% • Entropía: {Math.round(data.colorEntropy*100)}% • Carácter: {caracter}</div>
+                <div className="colors" style={{marginTop:10}}>
+                  {data.dominantColors.slice(0,12).map((c,i)=>(<div key={i} title={`h:${c.h} s:${Math.round(c.s*100)} l:${Math.round(c.l*100)}`} className="colorSwatch" style={{background:hsl(c.h,c.s,c.l)}}/>))}
+                </div>
               </div>
-            </div>
+              <div className="card" style={{marginTop:18}}>
+                <h3>Colores → Notas / Escala</h3>
+                <div className="colors" style={{marginTop:10}}>
+                  {data.dominantColors.slice(0,12).map((c,i)=>(
+                    <div key={i} className="colorSwatch" title={`h:${c.h}`}>
+                      <div style={{
+                        height:'42px', borderRadius:'10px', border:'1px solid #374151',
+                        background:`hsl(${c.h} ${c.s*100}% ${c.l*100}%)`
+                      }} />
+                      <div className="small">
+                        {noteForColor(c.h, scale)} • {mood==='feliz' ? (data.avgBrightness>0.55?'Lidia':'Jónica') : (data.avgSaturation>0.45?'Dórica':'Eólica')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
           ):(
-            <div className="card"><h3>¿Cómo funciona?</h3><p className="small">Brillo→BPM, saturación/temperatura→escala (dórica, frígia, lidia, pentas, whole, hirajoshi), entropía→densidad, contraste→filtros. Colores fuertes generan ritmos (kick/snare/hat).</p></div>
+            <div className="card"><h3>¿Cómo funciona?</h3><p className="small">Brillo→BPM, color cálido/frío→escala feliz/triste, riqueza→energía, contraste→filtros. Pulsa “¿Cómo funciona?” para más detalles.</p></div>
           )}
           {err && <div className="card" style={{marginTop:18, borderColor:'#b91c1c'}}><strong>Error:</strong> <span className="small">{String(err)}</span></div>}
         </div>
@@ -617,6 +526,27 @@ export default function ColorSynth(){
 
       <footer className="footer">Web App creada por Claude y corregida por Codex de Chat GPT con ideas de Diego Bastías A.  Agosto 2025</footer>
       <canvas ref={canvasRef} style={{display:'none'}}/>
+      {showHelp && (
+        <div style={{position:'fixed',inset:0,zIndex:60,background:'rgba(0,0,0,.45)',display:'grid',placeItems:'center'}} onClick={()=>setShowHelp(false)}>
+          <div className="card" style={{maxWidth:780, width:'92%', padding:'18px 20px'}} onClick={(e)=>e.stopPropagation()}>
+            <h3>Cómo funciona</h3>
+            <div className="p" style={{textAlign:'left'}}>
+              <ul style={{margin:'8px 0 0 18px'}}>
+                <li><b>Análisis 200%</b>: muestreamos más denso y agrupamos por <i>bins</i> de 6°; además buscamos <em>acentos</em> brillantes.</li>
+                <li><b>Feliz/Triste</b>: colores cálidos → Jónica/Lidia; fríos → Eólica/Dórica.</li>
+                <li><b>Calmo/Estruendoso</b>: si hay muchos colores fuertes distintos, sube la densidad y el brillo del Pad; si no, se calma.</li>
+                <li><b>Drone</b>: raíz grave estable que respira con filtros.</li>
+                <li><b>Pad</b>: acordes con tensiones (6/9/7) y micro-arpegios; duplicamos el dinamismo sin salir del ambient.</li>
+                <li><b>Colores → Notas</b>: cada matiz (hue) cae en un grado de la escala; lo verás bajo cada swatch.</li>
+                <li>El audio <b>no se corta</b> al abrir/cerrar este panel.</li>
+              </ul>
+            </div>
+            <div style={{textAlign:'right', marginTop:10}}>
+              <button className="btn" onClick={()=>setShowHelp(false)}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
