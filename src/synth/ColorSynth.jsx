@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import * as Tone from 'tone'
-import { Upload, Play, Pause, Volume2, SlidersHorizontal, Sparkles } from 'lucide-react'
+import { Upload, Play, Pause } from 'lucide-react'
 
 // PERF constants
-const PERF = { LOOK_AHEAD: 0.05, MAX_EVENTS_PER_TICK: 6, MAX_SYNTH_VOICES: 6, IMG_MAX_SIZE: 180, SAMPLE_STRIDE: 20, MAX_PARTICLES: 500 }
+const PERF = { LOOK_AHEAD: 0.05, MAX_EVENTS_PER_TICK: 10, MAX_SYNTH_VOICES: 8, IMG_MAX_SIZE: 180, SAMPLE_STRIDE: 20, MAX_PARTICLES: 700 }
 
 // Helpers
 const hsl = (h,s,l)=>`hsl(${h}, ${Math.round(s*100)}%, ${Math.round(l*100)}%)`
@@ -15,16 +15,28 @@ export default function ColorSynth(){
   const [data, setData] = useState(null)
   const [playing, setPlaying] = useState(false)
   const [err, setErr] = useState(null)
-  const [vizOn, setVizOn] = useState(false)
 
   // mixer
-  const [mix, setMix] = useState({ drone:-26, colors:-18, plucks:-22, pad:-24, bells:-26, noise:-36, drums:-30 })
+  const [mix, setMix] = useState({ drone:-20, colors:-12, plucks:-14, pad:-16, bells:-16, noise:-28, drums:-14 })
 
   const fileRef = useRef(null)
   const canvasRef = useRef(null)
   const preUrlRef = useRef(null)
   const abortRef = useRef({aborted:false})
   const wasPlayingRef = useRef(false)
+
+  const countsRef = useRef({ total:0, colores:0, plucks:0, pad:0, bells:0, drums:0 })
+  const [counts, setCounts] = useState({ total:0, colores:0, plucks:0, pad:0, bells:0, drums:0 })
+  const flushCounts = ()=>{ setCounts({...countsRef.current}) }
+
+  const noteHit = (kind) => {
+    const c = countsRef.current
+    c.total += 1
+    if (kind && c[kind] !== undefined) c[kind] += 1
+    if (!noteHit._raf) {
+      noteHit._raf = requestAnimationFrame(()=>{ flushCounts(); noteHit._raf = null })
+    }
+  }
 
   // audio nodes/buses
   const fx = useRef({})
@@ -71,10 +83,11 @@ export default function ColorSynth(){
   const setupAudioGraph = () => {
     if (fx.current.master) return
     const master = new Tone.Gain(1)
-    const comp = new Tone.Compressor(-24, 2.5)
+    const makeup = new Tone.Gain(Tone.dbToGain(3)) // ~+3 dB
+    const comp = new Tone.Compressor(-20, 3)
     const limiter = new Tone.Limiter(-1)
-    master.chain(comp, limiter, Tone.Destination)
-    fx.current = { master, comp, limiter, reverb: new Tone.Reverb({roomSize:.3, wet:.28}), delay: new Tone.FeedbackDelay({delayTime:'8n', feedback:.18, wet:.1}) }
+    master.chain(makeup, comp, limiter, Tone.Destination)
+    fx.current = { master, makeup, comp, limiter, reverb: new Tone.Reverb({roomSize:.32, wet:.30}), delay: new Tone.FeedbackDelay({delayTime:'8n', feedback:.20, wet:.12}) }
     const makeBus = (db)=> new Tone.Gain(Tone.dbToGain(db))
     buses.current = {
       drone: makeBus(mix.drone), colors: makeBus(mix.colors), plucks: makeBus(mix.plucks),
@@ -238,7 +251,7 @@ export default function ColorSynth(){
         const ft = new Tone.Filter({frequency:880,type:'lowpass'})
         const trem = new Tone.Tremolo(.5 + d.avgSaturation*1.2, .18).start()
         s.chain(ft, trem, buses.current.colors)
-        s.volume.value = -26 - i*2
+        s.volume.value = -20 - i*1.5
         voices.current.push({s, ft, color, scale})
       }
 
@@ -295,19 +308,19 @@ export default function ColorSynth(){
 
   const makeDrumSeq = ({K,S,H,vK,vS,vH})=>{
     try{ seqK.current?.dispose?.(); seqS.current?.dispose?.(); seqH.current?.dispose?.(); }catch{}
-    seqK.current = new Tone.Sequence((t,step)=>{ if(K[step]) kick.current?.triggerAttackRelease('C1','8n',t,vK[step]||.2); emit(0, .6, .35, .6, 'c') }, Array.from({length:16},(_,i)=>i), '16n').start(0)
-    seqS.current = new Tone.Sequence((t,step)=>{ if(S[step]) snare.current?.triggerAttackRelease('8n',t,vS[step]||.15); emit(220,.6,.6,.55,'s') }, Array.from({length:16},(_,i)=>i), '16n').start(0)
-    seqH.current = new Tone.Sequence((t,step)=>{ if(H[step]) hat.current?.triggerAttackRelease('16n',t,vH[step]||.1); emit(55,.7,.7,.35,'s') }, Array.from({length:16},(_,i)=>i), '16n').start(0)
+    seqK.current = new Tone.Sequence((t,step)=>{ if(K[step]) { kick.current?.triggerAttackRelease('C1','8n',t,vK[step]||.2); noteHit('drums'); emit(0, .6, .35, .6, 'c') } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
+    seqS.current = new Tone.Sequence((t,step)=>{ if(S[step]) { snare.current?.triggerAttackRelease('8n',t,vS[step]||.15); noteHit('drums'); emit(220,.6,.6,.55,'s') } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
+    seqH.current = new Tone.Sequence((t,step)=>{ if(H[step]) { hat.current?.triggerAttackRelease('16n',t,vH[step]||.1); noteHit('drums'); emit(55,.7,.7,.35,'s') } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
   }
 
   const startLoops = (d)=>{
     loopColors.current?.dispose?.(); loopPlucks.current?.dispose?.(); loopPad.current?.dispose?.(); loopBells.current?.dispose?.()
-    const step = Math.max(.12, 60/Math.max(30,d.bpm))
+    const step = Math.max(.10, 60/Math.max(35,d.bpm))
     loopColors.current = new Tone.Loop((time)=>{
       let ev=0
       voices.current.forEach(v=>{
         if (ev>=PERF.MAX_EVENTS_PER_TICK) return
-        const base = .11 + (d.colorEntropy*.16)
+        const base = .18 + (d.colorEntropy*.22)
         const weight = Math.min(1,(v.color.weight||1)/20)
         const sat = .22 + v.color.s*.7
         if (Math.random() < base*weight*sat) {
@@ -321,13 +334,14 @@ export default function ColorSynth(){
           v.ft.frequency.rampTo(clamp(baseF+varP,180,3200), .06)
           const nudge = (Math.random()-.5)*.02
           v.s.triggerAttackRelease(note, dur, time+nudge)
+          noteHit('colores')
           emit(v.color.h, v.color.s, v.color.l, .5, 'c')
           ev++
         }
       })
     }, step).start(0)
 
-    const intPl = Math.max(.2, .58 - d.avgBrightness*.38)
+    const intPl = Math.max(.16, .50 - d.avgBrightness*.35)
     loopPlucks.current = new Tone.Loop((time)=>{
       if (plucks.current.length===0) return
       if (Math.random() < (.14 + d.colorEntropy*.18)) {
@@ -336,28 +350,31 @@ export default function ColorSynth(){
         const note = sc[(Math.random()*sc.length)|0].replace('3','4')
         const nudge=(Math.random()-.5)*.02
         plucks.current[i].triggerAttack(note, time+nudge)
+        noteHit('plucks')
         emit(120+i*60, .5, .6, .45, 's')
       }
     }, intPl).start(0)
 
     loopPad.current = new Tone.Loop((time)=>{
       if (!pad.current) return
-      if (Math.random() < .38){
+      if (Math.random() < .50){
         const sc = chooseScale(d, {h:120, s:d.avgSaturation})
         const root = sc[(Math.random()*sc.length)|0]
         const fifth = Tone.Frequency(root).transpose(7).toNote()
         pad.current.triggerAttackRelease(root,'2n',time)
         if (Math.random()<.55) pad.current.triggerAttackRelease(fifth,'2n',time+.08)
+        noteHit('pad')
         emit(d.coolness>.5?180:30,.3,.5,.55,'r')
       }
     }, 8.5).start(0)
 
     loopBells.current = new Tone.Loop((time)=>{
       if (!bells.current) return
-      if (Math.random() < .07){
+      if (Math.random() < .12){
         const sc = chooseScale(d, {h:240, s:d.avgSaturation})
         const note = sc[(Math.random()*sc.length)|0].replace('3','5')
         bells.current.triggerAttackRelease(note, '8n', time)
+        noteHit('bells')
         emit(260,.5,.7,.5,'s')
       }
     }, 2.8).start(0)
@@ -369,14 +386,16 @@ export default function ColorSynth(){
     if (imgURL) URL.revokeObjectURL(imgURL)
     setImgURL(URL.createObjectURL(f))
     stopAll()
+    countsRef.current = { total:0, colores:0, plucks:0, pad:0, bells:0, drums:0 }
+    setCounts(countsRef.current)
     const d = await analyzeImage(f); if (!d) return
   }
 
   const togglePlay = async ()=>{
     if (!data) return
-    if (playing){ stopAll(); Tone.Transport.stop(); setPlaying(false); wasPlayingRef.current=false; return }
+    if (playing){ stopAll(); stopViz(); Tone.Transport.stop(); setPlaying(false); wasPlayingRef.current=false; return }
     const ok = await setupFromData(data)
-    if (ok){ Tone.Transport.start(); setPlaying(true); wasPlayingRef.current=true; }
+    if (ok){ startViz(); Tone.Transport.start(); setPlaying(true); wasPlayingRef.current=true; }
   }
 
   const testAudio = async ()=>{
@@ -401,6 +420,8 @@ export default function ColorSynth(){
     if (snare.current){ try{ snare.current.dispose?.() }catch{}; snare.current=null }
     if (hat.current){ try{ hat.current.dispose?.() }catch{}; hat.current=null }
     if (noise.current){ try{ noise.current.stop(); noise.current.dispose?.() }catch{}; noise.current=null }
+    countsRef.current = { total:0, colores:0, plucks:0, pad:0, bells:0, drums:0 }
+    setCounts(countsRef.current)
   }
   const softStop = ()=> stopAll()
   const hardStop = ()=>{ stopAll(); try{ Tone.Transport.stop(); Tone.Transport.cancel(0) }catch{}; stopViz(); if(preUrlRef.current){ URL.revokeObjectURL(preUrlRef.current); preUrlRef.current=null } }
@@ -436,7 +457,7 @@ export default function ColorSynth(){
     sizeRef.current = {w:c.width, h:c.height}
   }
   const emit=(h,s,l,intensity,shape)=>{
-    if (!vizOn) return
+    if (!overlayRef.current?.classList.contains('show')) return
     const c = overlayCanvasRef.current; const {w,h:hh} = sizeRef.current
     const x=Math.random()*w, y=Math.random()*hh
     const ang=Math.random()*Math.PI*2, sp=(.35+intensity*.7)*(Math.random()*.5+.5)
@@ -466,10 +487,10 @@ export default function ColorSynth(){
               </div>
             ):(
               <div>
-                <img className="img" src={imgURL} alt="subida"/>
+                <div className="imgBox"><img className="img" src={imgURL} alt="subida"/></div>
                 <div className="row" style={{marginTop:10}}>
-                  <button className="btn secondary" onClick={()=>{ if(imgURL) URL.revokeObjectURL(imgURL); setImgURL(null); setData(null); stopAll(); if(fileRef.current) fileRef.current.value='' }}>Subir otra</button>
-                  <button className="btn secondary" onClick={()=>{ setVizOn(v=>{ const n=!v; if(n) startViz(); else stopViz(); return n }) }}><Sparkles size={16}/> {vizOn?'Ocultar visual':'Visualizar sonidos en vivo'}</button>
+                  <button className="btn secondary" onClick={()=>{ if(imgURL) URL.revokeObjectURL(imgURL); setImgURL(null); setData(null); stopAll(); stopViz(); if(fileRef.current) fileRef.current.value='' }}>Subir otra</button>
+                  {/* Visual se maneja automáticamente al reproducir/detener */}
                 </div>
               </div>
             )}
@@ -484,6 +505,9 @@ export default function ColorSynth(){
                 <button className={"btn "+(playing?'red':'')} onClick={togglePlay}>{playing? <><Pause size={18}/> Detener</> : <><Play size={18}/> Reproducir</>}</button>
               </div>
               <div className="small">BPM: {data.bpm} • Brillo: {Math.round(data.avgBrightness*100)}% • Saturación: {Math.round(data.avgSaturation*100)}%</div>
+              <div className="small" style={{marginTop:6}}>
+                Notas: <strong>{counts.total}</strong> — Colores: {counts.colores} • Plucks: {counts.plucks} • Pad: {counts.pad} • Campanas: {counts.bells} • Drums: {counts.drums}
+              </div>
               <div className="row" style={{flexWrap:'wrap', marginTop:8, gap:12}}>
                 {Object.entries(mix).map(([k,v])=>(
                   <div key={k} style={{minWidth:200}}>
