@@ -1,10 +1,14 @@
-# Sintetizador de Colores (visual + drums + mixer, español)
+# Sintetizador de Colores (visual + drums + mixer, **PERF**)
 
-- Fuente **Montserrat** aplicada globalmente.
-- Botón **“Visualizar sonidos en vivo”**: activa un visualizador de partículas sobrio y elegante, sincronizado con los eventos sonoros (colores, pad, plucks, campanas y batería).
-- Mezclador por instrumento (Drone, Colores, Plucks, Pad, Campanas, Ruido, Batería).
-- Drumkit sutil con patrones derivados de colores fuertes.
-- Estabilidad de audio y limpieza de memoria.
+- Optimizaciones agresivas de CPU/Memoria
+  - Limpieza total de nodos/loops/secuencias al cambiar imagen (sin fugas).
+  - Reutiliza FX y buses; voz máxima por tick; cap de partículas; overlay adaptativo.
+  - Análisis de imagen con `createImageBitmap` (cuando existe) + downsampling adaptativo y bins de 12°.
+  - Revoke de object URLs y abort flags para análisis concurrentes.
+  - Transporte con `swing` y latencia ajustada; eventos micro-desfasados.
+- Cobertura de color más amplia (+4 highlights brillantes asegurados).
+- Más dinamismo musical: swing, microtiming, octavas, prob. ligadas a tono/sat/entropía.
+- UI Montserrat + visualizador en vivo.
 
 ## Local
 ```bash
@@ -18,6 +22,6 @@ npm run build
 npm run preview
 ```
 
-## Render
+## Render (Static)
 - Build Command: `npm install && npm run build`
 - Publish Directory: `dist`
