@@ -1,10 +1,10 @@
-# Sintetizador de Colores (drums + mixer + español)
+# Sintetizador de Colores (visual + drums + mixer, español)
 
-- UI en español, “Propósito y fórmula” y créditos.
+- Fuente **Montserrat** aplicada globalmente.
+- Botón **“Visualizar sonidos en vivo”**: activa un visualizador de partículas sobrio y elegante, sincronizado con los eventos sonoros (colores, pad, plucks, campanas y batería).
 - Mezclador por instrumento (Drone, Colores, Plucks, Pad, Campanas, Ruido, Batería).
-- Drumkit sutil (kick/snare/hats) con patrones derivados de colores fuertes (no pastel), sincronizado al BPM.
-- Arreglos de memoria y reanudación de audio al cambiar de pestaña.
-- Listo para Render Static.
+- Drumkit sutil con patrones derivados de colores fuertes.
+- Estabilidad de audio y limpieza de memoria.
 
 ## Local
 ```bash

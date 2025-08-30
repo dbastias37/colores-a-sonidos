@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import * as Tone from 'tone';
-import { Upload, Play, Pause, Volume2, Settings, SlidersHorizontal } from 'lucide-react';
+import { Upload, Play, Pause, Volume2, Settings, SlidersHorizontal, Sparkles } from 'lucide-react';
 
 // Asegura el contexto de audio y suaviza el scheduling
 const ensureAudioContext = async () => {
@@ -22,6 +22,7 @@ const SintetizadorDeColores = () => {
   const [ajustesAudio, setAjustesAudio] = useState({ volume: -18, reverb: 0.35, filter: 1200 });
   const [audioListo, setAudioListo] = useState(false);
   const [audioError, setAudioError] = useState(null);
+  const [vizActivo, setVizActivo] = useState(false);
 
   // Mixer (dB)
   const [mixer, setMixer] = useState({
@@ -68,6 +69,11 @@ const SintetizadorDeColores = () => {
   const seqSnareRef = useRef(null);
   const seqHatRef = useRef(null);
 
+  // Visualización
+  const vizCanvasRef = useRef(null);
+  const vizAnimRef = useRef(null);
+  const vizRef = useRef({ particles: [], w: 0, h: 0 });
+
   // Escalas
   const escalas = {
     frio: ['C3','D3','Eb3','F3','G3','Ab3','Bb3','C4'],
@@ -95,7 +101,11 @@ const SintetizadorDeColores = () => {
           }
         };
         document.addEventListener('visibilitychange', onVis);
-        return () => document.removeEventListener('visibilitychange', onVis);
+        window.addEventListener('resize', resizeViz);
+        return () => {
+          document.removeEventListener('visibilitychange', onVis);
+          window.removeEventListener('resize', resizeViz);
+        };
       } catch (e) {
         setAudioError(e?.message || String(e));
       }
@@ -149,6 +159,101 @@ const SintetizadorDeColores = () => {
     setAudioListo(true);
   };
 
+  // ---------- Visualización ----------
+
+  const toggleViz = () => {
+    setVizActivo(v => {
+      const next = !v;
+      if (next) startViz();
+      else stopViz();
+      return next;
+    });
+  };
+
+  const resizeViz = () => {
+    const cvs = vizCanvasRef.current;
+    if (!cvs) return;
+    cvs.width = window.innerWidth;
+    cvs.height = window.innerHeight;
+    vizRef.current.w = cvs.width;
+    vizRef.current.h = cvs.height;
+  };
+
+  const startViz = () => {
+    const cvs = vizCanvasRef.current;
+    if (!cvs) return;
+    resizeViz();
+    const ctx = cvs.getContext('2d');
+    ctx.globalCompositeOperation = 'lighter'; // sobrio, pero con brillo suave en superposición
+    if (vizAnimRef.current) cancelAnimationFrame(vizAnimRef.current);
+
+    const loop = () => {
+      const { w, h, particles } = vizRef.current;
+      ctx.clearRect(0,0,w,h);
+
+      // Fondo sutil
+      ctx.fillStyle = 'rgba(255,255,255,0.015)';
+      ctx.fillRect(0,0,w,h);
+
+      // Dibujar partículas
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= 0.016;
+        p.r *= 0.995;
+
+        if (p.life <= 0 || p.r <= 0.5) { particles.splice(i, 1); continue; }
+
+        ctx.beginPath();
+        if (p.shape === 'ring') {
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = Math.max(0.5, p.r * 0.05);
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+          ctx.stroke();
+        } else if (p.shape === 'spark') {
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = 1;
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(p.x + p.vx*6, p.y + p.vy*6);
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = p.color;
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+          ctx.fill();
+        }
+      }
+
+      // Límite de partículas
+      if (particles.length > 900) particles.splice(0, particles.length - 900);
+
+      vizAnimRef.current = requestAnimationFrame(loop);
+    };
+    vizAnimRef.current = requestAnimationFrame(loop);
+  };
+
+  const stopViz = () => {
+    if (vizAnimRef.current) cancelAnimationFrame(vizAnimRef.current);
+    vizAnimRef.current = null;
+    if (vizRef.current) vizRef.current.particles = [];
+  };
+
+  const emitViz = ({ h=180, s=0.6, l=0.5, intensity=1, shape='circle' }) => {
+    // No emite si visualización apagada
+    if (!vizActivo) return;
+    const { w, h:hh, particles } = vizRef.current;
+    const x = Math.random()*w;
+    const y = Math.random()*hh;
+    const speed = (0.4 + intensity*0.8) * (Math.random()*0.6 + 0.4);
+    const angle = Math.random()*Math.PI*2;
+    const vx = Math.cos(angle)*speed;
+    const vy = Math.sin(angle)*speed;
+    const r = 2 + intensity*10*(Math.random()*0.6 + 0.7);
+    const alpha = 0.18 + 0.25*Math.min(1, intensity);
+    const color = `hsla(${Math.round(h)}, ${Math.round(s*100)}%, ${Math.round(l*100)}%, ${alpha})`;
+    particles.push({ x, y, vx, vy, r, life: 1.2 + intensity*0.8, color, shape });
+  };
+
   // ---------- Análisis de imagen ----------
 
   const analizarImagen = (file) => {
@@ -187,7 +292,7 @@ const SintetizadorDeColores = () => {
           if (h >= 120 && h <= 300) cool++; else warm++;
           if (s < 0.3 && l > 0.7) pastel++; else if (s > 0.7 || l < 0.3) bright++;
 
-          const grp = { h: Math.round(h/15)*15, s, l, weight: 1 }; // más fino para drums
+          const grp = { h: Math.round(h/15)*15, s, l, weight: 1 };
           const ex = grupos.find(gp => gp.h === grp.h);
           if (ex) { ex.weight++; ex.s = (ex.s + s)/2; ex.l = (ex.l + l)/2; }
           else grupos.push(grp);
@@ -271,7 +376,7 @@ const SintetizadorDeColores = () => {
       setupGlobalAudio();
       limpiarVoces(); // conserva FX y buses
 
-      // Alinear BPM del transport para coherencia de duraciones tipo '8n', '16n'
+      // BPM coherente para secuencias
       Tone.Transport.bpm.rampTo(d.bpm, 0.1);
 
       // DRONE
@@ -281,6 +386,7 @@ const SintetizadorDeColores = () => {
       ambient.volume.value = ajustesAudio.volume;
       ambientSynthRef.current = ambient;
       ambient.triggerAttack('C2');
+      emitViz({ h: d.coolness>0.5 ? 200:20, s:0.2, l:0.4, intensity:0.4, shape:'ring' });
 
       // COLORES
       d.dominantColors.slice(0,6).forEach((color, idx) => {
@@ -323,31 +429,24 @@ const SintetizadorDeColores = () => {
       const rf = new Tone.Filter({ frequency: 900, type:'lowpass' });
       noise.chain(autoF, rf, busesRef.current.ruido);
       ruidoRef.current = { noise, autoFilter: autoF, filter: rf };
-      noise.start(); // control por bus
+      noise.start();
 
-      // DRUMS (kick/snare/hats) muy leves
+      // DRUMS
       const kick = new Tone.MembraneSynth({ pitchDecay: 0.03, octaves: 6, oscillator: { type: 'sine' }, envelope: { attack: 0.001, decay: 0.5, sustain: 0, release: 0.4 } });
       kick.chain(busesRef.current.bateria);
       kickRef.current = kick;
 
-      const snare = new Tone.NoiseSynth({
-        noise: { type: 'white' },
-        envelope: { attack: 0.001, decay: 0.2, sustain: 0 }
-      });
+      const snare = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.001, decay: 0.2, sustain: 0 } });
       const snareHP = new Tone.Filter({ type: 'highpass', frequency: 1800 });
       snare.chain(snareHP, busesRef.current.bateria);
       snareRef.current = snare;
 
-      const hat = new Tone.MetalSynth({
-        frequency: 250, envelope: { attack: 0.001, decay: 0.05, release: 0.01 },
-        harmonicity: 5.1, modulationIndex: 32, resonance: 3000, octaves: 1.5
-      });
+      const hat = new Tone.MetalSynth({ frequency: 250, envelope: { attack: 0.001, decay: 0.05, release: 0.01 }, harmonicity: 5.1, modulationIndex: 32, resonance: 3000, octaves: 1.5 });
       hat.chain(busesRef.current.bateria);
       hatRef.current = hat;
 
-      // Construir patrones de batería en base a colores fuertes
       const patterns = construirPatronesBateria(d);
-      crearSecuenciasDrum(patterns);
+      crearSecuenciasDrum(patterns, d);
 
       return true;
     } catch (e) {
@@ -364,14 +463,12 @@ const SintetizadorDeColores = () => {
     const snare = Array(steps).fill(0);
     const hat = Array(steps).fill(0);
 
-    // Determinar colores "fuertes" (no pastel, suficiente saturación y luz media)
     const fuertes = d.dominantColors
       .filter(c => c.s > 0.55 && c.l > 0.25 && c.l < 0.8)
       .slice(0, 6);
 
     const totalPeso = fuertes.reduce((acc, c) => acc + (c.weight || 1), 0) || 1;
 
-    // util: Euclidean rhythm
     const euclid = (pulses, len, rot=0) => {
       const pattern = Array(len).fill(0);
       let bucket = 0;
@@ -391,43 +488,32 @@ const SintetizadorDeColores = () => {
     fuertes.forEach(c => {
       const w = (c.weight || 1) / totalPeso;
       const rot = rotFromHue(c.h);
-      // Mapeo por grupos de color
       if (c.h < 20 || c.h >= 340) {
-        // ROJO → patrones de bombo densos y directos (E(5,16))
         addPattern(kick, euclid(5, steps, rot), w, 1.0);
         addPattern(hat, euclid(7, steps, rot+2), w*0.5);
       } else if (c.h < 50) {
-        // NARANJO → síncopa en snare (E(3,8) sobre 16) + kick ligero
         const sn = euclid(3, 8, Math.floor(rot/2));
-        // expandir a 16
         const sn16 = sn.flatMap(v => [v,0]);
         addPattern(snare, sn16, w, 0.9);
         addPattern(kick, euclid(3, steps, rot+1), w*0.5);
       } else if (c.h < 90) {
-        // AMARILLO → hats con pulso estable (E(5,16))
         addPattern(hat, euclid(5, steps, rot), w, 0.9);
       } else if (c.h < 165) {
-        // VERDE → kick quebrado y hats entrecortados
         addPattern(kick, euclid(4, steps, rot+1), w*0.8);
         addPattern(hat, euclid(3, steps, rot+3), w*0.6);
       } else if (c.h < 210) {
-        // CIAN → hats abiertos ocasionales (representados con mayor vel)
         addPattern(hat, euclid(2, steps, rot+2), w*1.2);
       } else if (c.h < 270) {
-        // AZUL → snare en 3 con fantasmas
-        const base = Array(steps).fill(0); base[4] = 1; base[12] = 1; // 2 y 4 en 16
+        const base = Array(steps).fill(0); base[4] = 1; base[12] = 1;
         addPattern(snare, base, w, 1.0);
-        addPattern(snare, euclid(2, steps, rot+5), w*0.4); // ghosts
+        addPattern(snare, euclid(2, steps, rot+5), w*0.4);
       } else {
-        // MORADO → contratiempos ligeros en hats
         addPattern(hat, euclid(4, steps, rot+4), w*0.8);
       }
     });
 
-    // Normalizar y umbral para convertir en golpes discretos
     const thresh = (arr, t) => arr.map(v => v >= t ? 1 : 0);
 
-    // El umbral depende de cuántos colores fuertes hay (menos colores → más fácil disparar)
     const n = Math.max(1, fuertes.length);
     const kT = 0.4 / Math.sqrt(n);
     const sT = 0.45 / Math.sqrt(n);
@@ -437,36 +523,36 @@ const SintetizadorDeColores = () => {
       kick: thresh(kick, kT),
       snare: thresh(snare, sT),
       hat: thresh(hat, hT),
-      // Velocidades suaves por defecto
       velKick: kick.map(v => v ? 0.25 : 0),
       velSnare: snare.map(v => v ? 0.18 : 0),
       velHat: hat.map(v => v ? 0.12 : 0),
     };
   };
 
-  const crearSecuenciasDrum = ({kick, snare, hat, velKick, velSnare, velHat}) => {
-    // Limpiar secuencias previas
+  const crearSecuenciasDrum = ({kick, snare, hat, velKick, velSnare, velHat}, d) => {
     try { seqKickRef.current?.dispose?.(); } catch {}
     try { seqSnareRef.current?.dispose?.(); } catch {}
     try { seqHatRef.current?.dispose?.(); } catch {}
     seqKickRef.current = null; seqSnareRef.current = null; seqHatRef.current = null;
 
-    // Crear Sequence con 16 pasos cada '16n'
+    const emitKick = () => emitViz({ h: 0, s:0.7, l:0.35, intensity:0.8, shape:'circle' });
+    const emitSnare = () => emitViz({ h: 220, s:0.6, l:0.6, intensity:0.6, shape:'spark' });
+    const emitHat = () => emitViz({ h: 55, s:0.7, l:0.7, intensity:0.4, shape:'spark' });
+
     seqKickRef.current = new Tone.Sequence((time, step) => {
       if (!kickRef.current) return;
-      if (kick[step]) kickRef.current.triggerAttackRelease('C1', '8n', time, velKick[step] || 0.2);
+      if (kick[step]) { kickRef.current.triggerAttackRelease('C1', '8n', time, velKick[step] || 0.2); emitKick(); }
     }, Array.from({length:16}, (_,i)=>i), '16n');
 
     seqSnareRef.current = new Tone.Sequence((time, step) => {
       if (!snareRef.current) return;
-      if (snare[step]) snareRef.current.triggerAttackRelease('8n', time, velSnare[step] || 0.15);
+      if (snare[step]) { snareRef.current.triggerAttackRelease('8n', time, velSnare[step] || 0.15); emitSnare(); }
     }, Array.from({length:16}, (_,i)=>i), '16n');
 
     seqHatRef.current = new Tone.Sequence((time, step) => {
       if (!hatRef.current) return;
-      if (hat[step]) hatRef.current.triggerAttackRelease('16n', time, velHat[step] || 0.1);
+      if (hat[step]) { hatRef.current.triggerAttackRelease('16n', time, velHat[step] || 0.1); emitHat(); }
     }, Array.from({length:16}, (_,i)=>i), '16n');
-
     seqKickRef.current.start(0);
     seqSnareRef.current.start(0);
     seqHatRef.current.start(0);
@@ -494,6 +580,7 @@ const SintetizadorDeColores = () => {
           const varPitch = (Math.random()-0.5) * d.contrast * 40;
           obj.filter.frequency.rampTo(Math.max(180, Math.min(3500, baseFreq + varPitch)), 0.08);
           obj.synth.triggerAttackRelease(nota, dur, time);
+          emitViz({ h: obj.color.h, s: obj.color.s, l: obj.color.l, intensity: 0.5 + obj.color.s*0.5, shape:'circle' });
         }
       });
     }, paso);
@@ -508,6 +595,7 @@ const SintetizadorDeColores = () => {
         const escala = seleccionarEscala(d, { h: 60*(1+idx), s: d.avgSaturation });
         const nota = escala[(Math.random()*escala.length)|0].replace('3','4');
         pl.triggerAttack(nota, time);
+        emitViz({ h: 120 + idx*60, s:0.5, l:0.6, intensity:0.5, shape:'spark' });
       }
     }, intervaloPluck);
     loopPlucksRef.current.start(0);
@@ -521,6 +609,7 @@ const SintetizadorDeColores = () => {
         const quinta = Tone.Frequency(root).transpose(7).toNote();
         padRef.current.triggerAttackRelease(root, '2n', time);
         if (Math.random() < 0.6) padRef.current.triggerAttackRelease(quinta, '2n', time + 0.1);
+        emitViz({ h: d.coolness>0.5? 180:30, s:0.3, l:0.5, intensity:0.6, shape:'ring' });
       }
     }, intervaloPad);
     loopPadRef.current.start(0);
@@ -532,6 +621,7 @@ const SintetizadorDeColores = () => {
         const escala = seleccionarEscala(d, { h: 240, s: d.avgSaturation });
         const nota = escala[(Math.random()*escala.length)|0].replace('3','5');
         campanasRef.current.triggerAttackRelease(nota, '8n', time);
+        emitViz({ h: 260, s:0.5, l:0.7, intensity:0.6, shape:'spark' });
       }
     }, pasoCampanas);
     loopCampanasRef.current.start(0);
@@ -619,9 +709,7 @@ const SintetizadorDeColores = () => {
     ruidoRef.current = { noise:null, autoFilter:null, filter:null };
   };
 
-  const limpiarVoces = () => { // Limpia voces y loops pero conserva buses/FX
-  softStop();
-};
+  const limpiarVoces = () => { softStop(); };
 
   const hardStopAndDispose = () => {
     softStop();
@@ -641,9 +729,8 @@ const SintetizadorDeColores = () => {
     setReproduciendo(false);
     setAudioListo(false);
     if (currentImageUrlRef.current) { URL.revokeObjectURL(currentImageUrlRef.current); currentImageUrlRef.current = null; }
+    stopViz();
   };
-
-  // ---------- UI ----------
 
   const actualizarAjuste = (k, v) => {
     setAjustesAudio(p => ({ ...p, [k]: v }));
@@ -651,8 +738,10 @@ const SintetizadorDeColores = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white p-8">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white p-8 relative">
+      {/* Canvas de visualización (overlay sobrio) */}
+      <canvas ref={vizCanvasRef} className={`fixed inset-0 z-0 transition-opacity duration-500 pointer-events-none ${vizActivo ? 'opacity-80' : 'opacity-0'}`} />
+      <div className="relative z-10 max-w-6xl mx-auto">
         <header className="text-center mb-12">
           <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">Sintetizador de Colores</h1>
           <p className="text-slate-300 text-lg">Convierte tus imágenes en paisajes sonoros ambient</p>
@@ -678,12 +767,15 @@ const SintetizadorDeColores = () => {
                 </div>
               )}
               <input ref={fileInputRef} type="file" accept="image/*" onChange={async (e)=>{ await manejarSubidaImagen(e); }} className="hidden" />
-              <div className="mt-4">
-                <label className="block w-full py-3 px-6 bg-purple-600 hover:bg-purple-700 rounded-xl font-semibold transition-colors cursor-pointer text-center">
+              <div className="mt-4 flex flex-col sm:flex-row gap-3">
+                <label className="flex-1 py-3 px-6 bg-purple-600 hover:bg-purple-700 rounded-xl font-semibold transition-colors cursor-pointer text-center">
                   <Upload size={20} className="inline mr-2" />
                   Elegir archivo
                   <input type="file" accept="image/*" onChange={async (e)=>{ await manejarSubidaImagen(e); }} className="hidden" />
                 </label>
+                <button onClick={toggleViz} className={`flex-1 py-3 px-6 rounded-xl font-semibold transition-colors border border-purple-400/40 bg-slate-900/40 hover:bg-slate-900/60 flex items-center justify-center gap-2`}>
+                  <Sparkles size={18}/> {vizActivo ? 'Ocultar visualización' : 'Visualizar sonidos en vivo'}
+                </button>
               </div>
             </div>
 
