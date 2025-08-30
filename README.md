@@ -1,10 +1,10 @@
-# Color Sound Synthesizer (fixed)
+# Sintetizador de Colores (mixer + español)
 
-Mejoras clave:
-- **Sin cortes** al hacer scroll/visibility: reanuda el contexto y Transport.
-- **Sin fugas de memoria**: limpia/reutiliza efectos globales, cancela análisis anterior y revoca ObjectURLs.
-- **Más musicalidad**: plucks sincopados, más escalas, mayor rango dinámico sin perder el carácter ambient.
-- **Static site** listo para Render.
+- UI en español, sección “Propósito y fórmula” y créditos.
+- Mezclador por instrumento (Drone, Colores, Plucks, Pad, Campanas, Ruido).
+- 3 sonidos extra: Pad (AMSynth), Campanas (FMSynth), Ruido (pink + AutoFilter).
+- Arreglos de memoria y reanudación de audio al cambiar de pestaña.
+- Listo para Render Static.
 
 ## Local
 ```bash

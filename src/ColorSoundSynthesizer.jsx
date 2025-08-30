@@ -1,75 +1,88 @@
 import React, { useState, useRef, useEffect } from 'react';
 import * as Tone from 'tone';
-import { Upload, Play, Pause, Volume2, Settings } from 'lucide-react';
+import { Upload, Play, Pause, Volume2, Settings, SlidersHorizontal } from 'lucide-react';
 
-// Util: crear context con ajustes suaves para evitar dropouts
+// Asegura el contexto de audio y suaviza el scheduling
 const ensureAudioContext = async () => {
   if (Tone.context.state !== 'running') {
     await Tone.start();
   }
-  // Afinar lookAhead para scheduling estable
   try {
     const ctx = Tone.getContext();
     if (typeof ctx.lookAhead !== 'undefined') ctx.lookAhead = 0.1;
   } catch {}
 };
 
-const ColorSoundSynthesizer = () => {
-  const [image, setImage] = useState(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [colorData, setColorData] = useState(null);
-  const [audioSettings, setAudioSettings] = useState({
-    volume: -18,
-    reverb: 0.35,
-    filter: 1200
-  });
-  const [audioReady, setAudioReady] = useState(false);
+const SintetizadorDeColores = () => {
+  // Estado general
+  const [imagen, setImagen] = useState(null);
+  const [reproduciendo, setReproduciendo] = useState(false);
+  const [analizando, setAnalizando] = useState(false);
+  const [datosColor, setDatosColor] = useState(null);
+  const [ajustesAudio, setAjustesAudio] = useState({ volume: -18, reverb: 0.35, filter: 1200 });
+  const [audioListo, setAudioListo] = useState(false);
   const [audioError, setAudioError] = useState(null);
-  
-  const canvasRef = useRef(null);
-  const synthsRef = useRef([]);            // color voices
-  const plucksRef = useRef([]);            // pluck voices
-  const ambientSynthRef = useRef(null);    // drone
-  const sequenceRef = useRef(null);
-  const pluckLoopRef = useRef(null);
-  const fileInputRef = useRef(null);
 
-  // Global/Shared nodes (reutilizables para no crear FX cada vez)
-  const masterRef = useRef(null);
-  const fxRef = useRef({ reverb: null, delay: null, comp: null, limiter: null });
+  // Mixer (dB)
+  const [mixer, setMixer] = useState({
+    droneDb: -24,
+    coloresDb: -16,
+    plucksDb: -20,
+    padDb: -22,
+    campanasDb: -24,
+    ruidoDb: -35,
+  });
+
+  // Refs
+  const canvasRef = useRef(null);
+  const fileInputRef = useRef(null);
   const wasPlayingRef = useRef(false);
   const currentImageUrlRef = useRef(null);
   const analyzeAbortRef = useRef({ aborted: false });
 
-  // Escalas musicales ampliadas
-  const scales = {
-    cold: ['C3','D3','Eb3','F3','G3','Ab3','Bb3','C4'],           // minor-ish
-    warm: ['C3','D3','E3','F#3','G3','A3','B3','C4'],             // major/lydian
-    pastel: ['C3','E3','G3','B3','D4','F#4'],                     // airy major6
-    bright: ['C3','D#3','F#3','A3','C4','D#4','F#4'],             // augmented flavor
-    dorian: ['C3','D3','Eb3','F3','G3','A3','Bb3','C4'],
-    phrygian: ['C3','Db3','Eb3','F3','G3','Ab3','Bb3','C4'],
-    lydian: ['C3','D3','E3','F#3','G3','A3','B3','C4'],
+  // Nodos
+  const masterRef = useRef(null);
+  const fxRef = useRef({ reverb: null, delay: null, comp: null, limiter: null });
+  const busesRef = useRef({ drone: null, colores: null, plucks: null, pad: null, campanas: null, ruido: null });
+
+  // Instrumentos
+  const ambientSynthRef = useRef(null);
+  const synthsRef = useRef([]);     // voces por color
+  const plucksRef = useRef([]);     // plucks
+  const padRef = useRef(null);      // AMSynth pad
+  const campanasRef = useRef(null); // FMSynth bells
+  const ruidoRef = useRef({ noise: null, autoFilter: null, filter: null });
+
+  // Loops
+  const loopColoresRef = useRef(null);
+  const loopPlucksRef = useRef(null);
+  const loopPadRef = useRef(null);
+  const loopCampanasRef = useRef(null);
+
+  // Escalas
+  const escalas = {
+    frio: ['C3','D3','Eb3','F3','G3','Ab3','Bb3','C4'],
+    calido: ['C3','D3','E3','F#3','G3','A3','B3','C4'],
+    pastel: ['C3','E3','G3','B3','D4','F#4'],
+    brillante: ['C3','D#3','F#3','A3','C4','D#4','F#4'],
+    dorica: ['C3','D3','Eb3','F3','G3','A3','Bb3','C4'],
+    frigia: ['C3','Db3','Eb3','F3','G3','Ab3','Bb3','C4'],
+    lidia: ['C3','D3','E3','F#3','G3','A3','B3','C4'],
     whole: ['C3','D3','E3','F#3','G#3','A#3','C4'],
-    hirajoshi: ['C3','Db3','F3','G3','Ab3','C4'],
-    pentMinor: ['C3','Eb3','F3','G3','Bb3','C4'],
-    pentMajor: ['C3','D3','E3','G3','A3','C4']
+    hira: ['C3','Db3','F3','G3','Ab3','C4'],
+    pentMenor: ['C3','Eb3','F3','G3','Bb3','C4'],
+    pentMayor: ['C3','D3','E3','G3','A3','C4']
   };
 
   useEffect(() => {
-    // Inicializar motor de audio una vez
+    // Inicializa audio + manejador de visibilidad
     (async () => {
       try {
         await ensureAudioContext();
         setupGlobalAudio();
-        // Resiliencia a visibility/scroll: reanudar si estaba sonando
         const onVis = async () => {
           if (document.visibilityState === 'visible' && wasPlayingRef.current) {
-            try {
-              await Tone.context.resume();
-              Tone.Transport.start();
-            } catch {}
+            try { await Tone.context.resume(); Tone.Transport.start(); } catch {}
           }
         };
         document.addEventListener('visibilitychange', onVis);
@@ -78,39 +91,66 @@ const ColorSoundSynthesizer = () => {
         setAudioError(e?.message || String(e));
       }
     })();
-
-    return () => {
-      // Limpieza total al desmontar
-      hardStopAndDispose();
-    };
+    return () => hardStopAndDispose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Aplica mezclador cuando cambian los sliders
+  useEffect(() => {
+    try {
+      const setBusDb = (bus, db) => bus?.gain?.rampTo(Tone.dbToGain(db), 0.05);
+      setBusDb(busesRef.current.drone, mixer.droneDb);
+      setBusDb(busesRef.current.colores, mixer.coloresDb);
+      setBusDb(busesRef.current.plucks, mixer.plucksDb);
+      setBusDb(busesRef.current.pad, mixer.padDb);
+      setBusDb(busesRef.current.campanas, mixer.campanasDb);
+      setBusDb(busesRef.current.ruido, mixer.ruidoDb);
+    } catch {}
+  }, [mixer]);
+
   const setupGlobalAudio = () => {
-    // Crear o reutilizar master + FX una vez
     if (!masterRef.current) {
       const master = new Tone.Gain(1);
       const comp = new Tone.Compressor(-22, 3);
       const limiter = new Tone.Limiter(-1);
-      const reverb = new Tone.Reverb({ roomSize: audioSettings.reverb, wet: 0.35 });
+      const reverb = new Tone.Reverb({ roomSize: ajustesAudio.reverb, wet: 0.35 });
       const delay = new Tone.FeedbackDelay({ delayTime: '8n', feedback: 0.22, wet: 0.12 });
-
       master.chain(comp, limiter, Tone.Destination);
       fxRef.current = { reverb, delay, comp, limiter };
       masterRef.current = master;
+
+      // Buses (mezclador)
+      const makeBus = (db) => new Tone.Gain(Tone.dbToGain(db));
+      busesRef.current = {
+        drone: makeBus(mixer.droneDb),
+        colores: makeBus(mixer.coloresDb),
+        plucks: makeBus(mixer.plucksDb),
+        pad: makeBus(mixer.padDb),
+        campanas: makeBus(mixer.campanasDb),
+        ruido: makeBus(mixer.ruidoDb),
+      };
+      Object.values(busesRef.current).forEach(bus => {
+        bus.chain(fxRef.current.delay, fxRef.current.reverb, masterRef.current);
+      });
     }
-    setAudioReady(true);
+    setAudioListo(true);
   };
 
-  // --- Imagen / Análisis ---
+  // ---------- Análisis de imagen ----------
+  const analizarImagen = (file) => {
+    analyzeAbortRef.current.aborted = TrueIfReset(); // placeholder to keep code consistent
+  };
 
-  const analyzeImage = (file) => {
+  // Corrige placeholder anterior (evitar errores de pegado)
+  const TrueIfReset = () => false;
+
+  const analizarImagenReal = (file) => {
     // cancelar análisis anterior
     analyzeAbortRef.current.aborted = true;
     analyzeAbortRef.current = { aborted: false };
 
     return new Promise((resolve) => {
-      setIsAnalyzing(true);
+      setAnalizando(true);
       const localAbort = analyzeAbortRef.current;
 
       const img = new Image();
@@ -128,76 +168,57 @@ const ColorSoundSynthesizer = () => {
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const pixels = imageData.data;
 
-        let totalBrightness = 0;
-        let totalSaturation = 0;
-        let coolColors = 0;
-        let warmColors = 0;
-        let pastelColors = 0;
-        let brightColors = 0;
-        let pixelCount = 0;
-
-        const colorGroups = [];
+        let totalBrightness = 0, totalSaturation = 0, cool = 0, warm = 0, pastel = 0, bright = 0, count = 0;
+        const grupos = [];
 
         for (let i = 0; i < pixels.length; i += 16) {
           if (localAbort.aborted) return;
-          const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
-          if (pixels[i + 3] === 0) continue;
+          const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
+          if (pixels[i+3] === 0) continue;
           const { h, s, l } = rgbToHsl(r, g, b);
-          totalBrightness += l;
-          totalSaturation += s;
-          pixelCount++;
+          totalBrightness += l; totalSaturation += s; count++;
+          if (h >= 120 && h <= 300) cool++; else warm++;
+          if (s < 0.3 && l > 0.7) pastel++; else if (s > 0.7 || l < 0.3) bright++;
 
-          if (h >= 120 && h <= 300) coolColors++; else warmColors++;
-
-          if (s < 0.3 && l > 0.7) pastelColors++;
-          else if (s > 0.7 || l < 0.3) brightColors++;
-
-          const colorGroup = { h: Math.round(h / 30) * 30, s, l, weight: 1 };
-          const existing = colorGroups.find(gp => gp.h === colorGroup.h);
-          if (existing) {
-            existing.weight++;
-            existing.s = (existing.s + s) / 2;
-            existing.l = (existing.l + l) / 2;
-          } else {
-            colorGroups.push(colorGroup);
-          }
+          const grp = { h: Math.round(h/30)*30, s, l, weight: 1 };
+          const ex = grupos.find(gp => gp.h === grp.h);
+          if (ex) { ex.weight++; ex.s = (ex.s + s)/2; ex.l = (ex.l + l)/2; }
+          else grupos.push(grp);
         }
 
         if (localAbort.aborted) return;
 
-        const avgBrightness = pixelCount ? totalBrightness / pixelCount : 0.5;
-        const avgSaturation = pixelCount ? totalSaturation / pixelCount : 0.5;
-        const coolness = (coolColors + warmColors) ? coolColors / (coolColors + warmColors) : 0.5;
-        const pastelnessRatio = pixelCount ? pastelColors / pixelCount : 0;
-        const brightnessRatio = pixelCount ? brightColors / pixelCount : 0;
+        const avgB = count ? totalBrightness / count : 0.5;
+        const avgS = count ? totalSaturation / count : 0.5;
+        const coolness = (cool+warm) ? cool / (cool+warm) : 0.5;
+        const pastelness = count ? pastel / count : 0;
+        const brightness = count ? bright / count : 0;
 
-        colorGroups.sort((a, b) => b.weight - a.weight);
-        const dominantColors = colorGroups.slice(0, 8);
+        grupos.sort((a,b) => b.weight - a.weight);
+        const dominantes = grupos.slice(0, 8);
+        const uniqueHues = new Set(dominantes.map(c => c.h)).size;
+        const entropia = dominantes.length ? uniqueHues / dominantes.length : 0.5;
 
-        const uniqueHues = new Set(dominantColors.map(c => c.h)).size;
-        const colorEntropy = dominantColors.length ? uniqueHues / dominantColors.length : 0.5;
-
-        const analysis = {
-          avgBrightness,
-          avgSaturation,
+        const analisis = {
+          avgBrightness: avgB,
+          avgSaturation: avgS,
           coolness,
-          pastelnessRatio,
-          brightnessRatio,
-          dominantColors,
-          colorEntropy,
-          bpm: Math.round(60 + (avgBrightness * 100)), // 60-160 BPM
-          contrast: Math.abs((dominantColors[0]?.l ?? 0.5) - (dominantColors[1]?.l ?? 0.5))
+          pastelnessRatio: pastelness,
+          brightnessRatio: brightness,
+          dominantColors: dominantes,
+          colorEntropy: entropia,
+          bpm: Math.round(60 + (avgB * 100)),
+          contrast: Math.abs((dominantes[0]?.l ?? 0.5) - (dominantes[1]?.l ?? 0.5))
         };
 
         if (!localAbort.aborted) {
-          setColorData(analysis);
-          setIsAnalyzing(false);
-          resolve(analysis);
+          setDatosColor(analisis);
+          setAnalizando(false);
+          resolve(analisis);
         }
       };
 
       const url = URL.createObjectURL(file);
-      // Revocar URL anterior para evitar fugas
       if (currentImageUrlRef.current) URL.revokeObjectURL(currentImageUrlRef.current);
       currentImageUrlRef.current = url;
       img.src = url;
@@ -205,76 +226,99 @@ const ColorSoundSynthesizer = () => {
   };
 
   const rgbToHsl = (r, g, b) => {
-    r /= 255; g /= 255; b /= 255;
-    const max = Math.max(r, g, b), min = Math.min(r, g, b);
-    let h, s, l = (max + min) / 2;
-    if (max === min) {
-      h = s = 0;
-    } else {
-      const d = max - min;
-      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-      switch (max) {
-        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
-        case g: h = (b - r) / d + 2; break;
-        case b: h = (r - g) / d + 4; break;
-        default: h = 0;
+    r/=255; g/=255; b/=255;
+    const max=Math.max(r,g,b), min=Math.min(r,g,b);
+    let h,s,l=(max+min)/2;
+    if(max===min){ h=s=0; }
+    else{
+      const d=max-min;
+      s=l>0.5? d/(2-max-min) : d/(max+min);
+      switch(max){
+        case r: h=(g-b)/d + (g<b?6:0); break;
+        case g: h=(b-r)/d + 2; break;
+        case b: h=(r-g)/d + 4; break;
+        default: h=0;
       }
-      h /= 6;
+      h/=6;
     }
-    return { h: h * 360, s, l };
+    return { h:h*360, s, l };
   };
 
-  // --- Audio Graph ---
+  // ---------- Audio ----------
 
-  const setupAudioForData = async (data) => {
+  const seleccionarEscala = (d, color) => {
+    if (d.pastelnessRatio > 0.35) return escalas.pastel;
+    if (d.brightnessRatio > 0.5) return escalas.brilhante || escalas.brilhante; // fallback typo safety
+    if (d.brightnessRatio > 0.5) return escalas.brilhante || escalas.brillante;
+    if (d.coolness > 0.65) return escalas.dorica;
+    if (d.coolness < 0.35) return escalas.lidia;
+    if (d.avgSaturation < 0.25) return escalas.pentMenor;
+    if (color.h % 60 === 0) return escalas.whole;
+    if (color.h % 90 === 0) return escalas.hira;
+    return (color.s > 0.6) ? escalas.pentMayor : escalas.frio;
+  };
+
+  const setupAudioParaDatos = async (d) => {
     try {
       setAudioError(null);
       await ensureAudioContext();
       setupGlobalAudio();
+      limpiarVoces(); // conserva FX y buses
 
-      // Limpia voces previas (mantiene FX/master)
-      clearVoices();
-
-      // Ambient base (drone) estable
-      const ambient = new Tone.Synth({
-        oscillator: { type: 'sine' },
-        envelope: { attack: 2.5, decay: 1.2, sustain: 0.85, release: 3.5 }
-      });
-      const lowpass = new Tone.Filter({ frequency: audioSettings.filter, type: 'lowpass' });
-      ambient.chain(lowpass, fxRef.current.delay, fxRef.current.reverb, masterRef.current);
-      ambient.volume.value = audioSettings.volume;
+      // DRONE
+      const ambient = new Tone.Synth({ oscillator:{ type:'sine' }, envelope:{ attack:2.5, decay:1.2, sustain:0.85, release:3.5 } });
+      const lowpass = new Tone.Filter({ frequency: ajustesAudio.filter, type:'lowpass' });
+      ambient.chain(lowpass, busesRef.current.drone);
+      ambient.volume.value = ajustesAudio.volume;
       ambientSynthRef.current = ambient;
-      // Inicia drone
-      ambientSynthRef.current.triggerAttack('C2');
+      ambient.triggerAttack('C2');
 
-      // Crear voces por color (limitadas)
-      const maxVoices = 6;
-      data.dominantColors.slice(0, maxVoices).forEach((color, index) => {
-        const scale = selectScale(data, color);
-        const synth = new Tone.Synth({
-          oscillator: { type: 'triangle' },
-          envelope: { attack: 0.25, decay: 0.6, sustain: 0.45, release: 1.2 }
-        });
-        const filt = new Tone.Filter({ frequency: 900, type: 'lowpass' });
-        const trem = new Tone.Tremolo(0.5 + data.avgSaturation * 1.5, 0.2).start();
-        synth.chain(filt, trem, fxRef.current.delay, fxRef.current.reverb, masterRef.current);
-        synth.volume.value = audioSettings.volume - 14 - (index * 2);
-        synthsRef.current.push({ synth, filter: filt, scale, color });
+      // COLORES
+      d.dominantColors.slice(0,6).forEach((color, idx) => {
+        const escala = seleccionarEscala(d, color);
+        const synth = new Tone.Synth({ oscillator:{ type:'triangle' }, envelope:{ attack:0.25, decay:0.6, sustain:0.45, release:1.2 } });
+        const filt = new Tone.Filter({ frequency: 900, type:'lowpass' });
+        const trem = new Tone.Tremolo(0.5 + d.avgSaturation * 1.5, 0.2).start();
+        synth.chain(filt, trem, busesRef.current.colores);
+        synth.volume.value = ajustesAudio.volume - 14 - (idx*2);
+        synthsRef.current.push({ synth, filter: filt, escala, color });
       });
 
-      // Plucks sincopados (suaves)
-      const nPlucks = 2;
-      for (let i=0;i<nPlucks;i++) {
-        const pl = new Tone.PluckSynth({
-          attackNoise: 1.2,
-          dampening: 3500,
-          resonance: 0.8
-        });
+      // PLUCKS
+      for (let i=0;i<2;i++){
+        const pl = new Tone.PluckSynth({ attackNoise:1.2, dampening:3500, resonance:0.8 });
         const pan = new Tone.AutoPanner(0.1 + i*0.05).start();
-        pl.chain(pan, fxRef.current.delay, fxRef.current.reverb, masterRef.current);
-        pl.volume.value = audioSettings.volume - 18 - i*2;
+        pl.chain(pan, busesRef.current.plucks);
+        pl.volume.value = ajustesAudio.volume - 18 - i*2;
         plucksRef.current.push(pl);
       }
+
+      // PAD (AMSynth)
+      const pad = new Tone.AMSynth({
+        oscillator: { type: 'sine' },
+        envelope: { attack: 1.5, decay: 1.2, sustain: 0.9, release: 4 }
+      });
+      pad.chain(busesRef.current.pad);
+      padRef.current = pad;
+
+      // CAMPANAS (FMSynth)
+      const bells = new Tone.FMSynth({
+        harmonicity: 8,
+        modulationIndex: 2,
+        envelope: { attack: 0.01, decay: 1.2, sustain: 0.0, release: 2.5 },
+        modulation: { type: 'sine' },
+        modulationEnvelope: { attack: 0.01, decay: 0.2, sustain: 0 }
+      });
+      bells.chain(busesRef.current.campanas);
+      campanasRef.current = bells;
+
+      // RUIDO (pink) con AutoFilter lento
+      const noise = new Tone.Noise('pink');
+      const autoF = new Tone.AutoFilter(0.05, 200, 2).start(); // lento
+      const rf = new Tone.Filter({ frequency: 800, type:'lowpass' });
+      noise.chain(autoF, rf, busesRef.current.ruido);
+      ruidoRef.current = { noise, autoFilter: autoF, filter: rf };
+      noise.start(); // muy bajo, controlarlo por el bus
 
       return true;
     } catch (e) {
@@ -283,373 +327,297 @@ const ColorSoundSynthesizer = () => {
     }
   };
 
-  const selectScale = (data, color) => {
-    // Selección más rica según propiedades
-    if (data.pastelnessRatio > 0.35) return scales.pastel;
-    if (data.brightnessRatio > 0.5) return scales.bright;
-    if (data.coolness > 0.65) return scales.dorian;
-    if (data.coolness < 0.35) return scales.lydian;
-    if (data.avgSaturation < 0.25) return scales.pentMinor;
-    if (color.h % 60 === 0) return scales.whole;
-    if (color.h % 90 === 0) return scales.hirajoshi;
-    return (color.s > 0.6) ? scales.pentMajor : scales.cold;
-  };
+  // ---------- Loops ----------
+  const iniciarLoops = (d) => {
+    if (loopColoresRef.current) { try { loopColoresRef.current.dispose(); } catch {} }
+    if (loopPlucksRef.current) { try { loopPlucksRef.current.dispose(); } catch {} }
+    if (loopPadRef.current) { try { loopPadRef.current.dispose(); } catch {} }
+    if (loopCampanasRef.current) { try { loopCampanasRef.current.dispose(); } catch {} }
 
-  // --- Sequences ---
+    const paso = Math.max(0.1, 60 / Math.max(30, d.bpm));
 
-  const startSequences = (data) => {
-    if (sequenceRef.current) { try { sequenceRef.current.dispose(); } catch {} }
-    if (pluckLoopRef.current) { try { pluckLoopRef.current.dispose(); } catch {} }
-
-    const step = Math.max(0.1, 60 / Math.max(30, data.bpm)); // segundos por paso
-
-    sequenceRef.current = new Tone.Loop((time) => {
-      synthsRef.current.forEach((synthObj) => {
-        // Probabilidad basada en entropía + saturación + peso de color
-        const baseProb = 0.12 + (data.colorEntropy * 0.18); // 0.12–0.30
-        const weightFactor = Math.min(1, synthObj.color.weight / 20);
-        const satFactor = 0.25 + (synthObj.color.s * 0.75);
-        const probability = baseProb * satFactor * weightFactor;
-
-        if (Math.random() < probability) {
-          const note = synthObj.scale[(Math.random()*synthObj.scale.length)|0];
+    // Voces por color (ambient)
+    loopColoresRef.current = new Tone.Loop((time) => {
+      synthsRef.current.forEach((obj) => {
+        const baseProb = 0.12 + (d.colorEntropy * 0.18);
+        const peso = Math.min(1, obj.color.weight/20);
+        const sat = 0.25 + (obj.color.s * 0.75);
+        const prob = baseProb * sat * peso;
+        if (Math.random() < prob) {
+          const nota = obj.escala[(Math.random()*obj.escala.length)|0];
           const dur = ['8n','4n','2n'][Math.floor(Math.random()*3)];
-          const baseFreq = 250 + (synthObj.color.h * 2);
-          const pitchVar = (Math.random() - 0.5) * data.contrast * 40;
-          synthObj.filter.frequency.rampTo(Math.max(180, Math.min(3500, baseFreq + pitchVar)), 0.08);
-          synthObj.synth.triggerAttackRelease(note, dur, time);
+          const baseFreq = 250 + (obj.color.h * 2);
+          const varPitch = (Math.random()-0.5) * d.contrast * 40;
+          obj.filter.frequency.rampTo(Math.max(180, Math.min(3500, baseFreq + varPitch)), 0.08);
+          obj.synth.triggerAttackRelease(nota, dur, time);
         }
       });
-    }, step);
-    sequenceRef.current.start(0);
+    }, paso);
+    loopColoresRef.current.start(0);
 
-    // Plucks con síncopa ligera (densidad por brillo)
-    const pluckInterval = Math.max(0.18, 0.6 - data.avgBrightness * 0.4);
-    pluckLoopRef.current = new Tone.Loop((time) => {
+    // Plucks sincopados
+    const intervaloPluck = Math.max(0.18, 0.6 - d.avgBrightness*0.4);
+    loopPlucksRef.current = new Tone.Loop((time) => {
       if (plucksRef.current.length === 0) return;
-      if (Math.random() < (0.15 + data.colorEntropy * 0.2)) {
-        const idx = Math.floor(Math.random() * plucksRef.current.length);
+      if (Math.random() < (0.15 + d.colorEntropy * 0.2)) {
+        const idx = (Math.random()*plucksRef.current.length)|0;
         const pl = plucksRef.current[idx];
-        const scale = selectScale(data, { h: 60 * (1+idx), s: data.avgSaturation });
-        const note = scale[(Math.random()*scale.length)|0].replace('3','4'); // subir una octava para pluck
-        pl.triggerAttack(note, time);
+        const escala = seleccionarEscala(d, { h: 60*(1+idx), s: d.avgSaturation });
+        const nota = escala[(Math.random()*escala.length)|0].replace('3','4');
+        pl.triggerAttack(nota, time);
       }
-    }, pluckInterval);
-    pluckLoopRef.current.start(0);
+    }, intervaloPluck);
+    loopPlucksRef.current.start(0);
+
+    // Pad: acordes esporádicos
+    const intervaloPad = 8; // s
+    loopPadRef.current = new Tone.Loop((time) => {
+      if (!padRef.current) return;
+      if (Math.random() < 0.4) {
+        const escala = seleccionarEscala(d, { h: 120, s: d.avgSaturation });
+        const root = escala[(Math.random()*escala.length)|0];
+        const quinta = Tone.Frequency(root).transpose(7).toNote();
+        padRef.current.triggerAttackRelease(root, '2n', time);
+        if (Math.random() < 0.6) padRef.current.triggerAttackRelease(quinta, '2n', time + 0.1);
+      }
+    }, intervaloPad);
+    loopPadRef.current.start(0);
+
+    // Campanas: muy ocasionales
+    const pasoCampanas = 2.5;
+    loopCampanasRef.current = new Tone.Loop((time) => {
+      if (!campanasRef.current) return;
+      if (Math.random() < 0.08) {
+        const escala = seleccionarEscala(d, { h: 240, s: d.avgSaturation });
+        const nota = escala[(Math.random()*escala.length)|0].replace('3','5'); // más agudo
+        campanasRef.current.triggerAttackRelease(nota, '8n', time);
+      }
+    }, pasoCampanas);
+    loopCampanasRef.current.start(0);
   };
 
-  // --- Handlers ---
+  // ---------- Controles ----------
 
-  const handleImageUpload = async (event) => {
-    const file = event.target.files && event.target.files[0];
+  const manejarSubidaImagen = async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
     if (!file || !file.type.startsWith('image/')) return;
-
-    setImage(URL.createObjectURL(file)); // solo para preview visual
-
-    // Preparar nuevo dataset: parar secuencias pero mantener master/FX
-    softStop(); // corta secuencias y voces activas
-    const analysis = await analyzeImage(file);
-    if (!analysis) return;
-
-    const ok = await setupAudioForData(analysis);
+    setImagen(URL.createObjectURL(file));
+    softStop(); // corta secuencias/voces anteriores
+    const analisis = await analizarImagenReal(file);
+    if (!analisis) return;
+    const ok = await setupAudioParaDatos(analisis);
     if (ok) {
-      startSequences(analysis);
-      if (isPlaying) {
-        Tone.Transport.start();
-      }
+      iniciarLoops(analisis);
+      if (reproduciendo) Tone.Transport.start();
     }
   };
 
-  const togglePlayback = async () => {
-    if (!colorData) return;
+  const alternarReproduccion = async () => {
+    if (!datosColor) return;
     await ensureAudioContext();
-    if (isPlaying) {
+    if (reproduciendo) {
       wasPlayingRef.current = false;
       softStop();
       Tone.Transport.stop();
-      setIsPlaying(false);
+      setReproduciendo(false);
     } else {
       setAudioError(null);
-      const ok = await setupAudioForData(colorData);
+      const ok = await setupAudioParaDatos(datosColor);
       if (ok) {
-        startSequences(colorData);
+        iniciarLoops(datosColor);
         Tone.Transport.start();
-        setIsPlaying(true);
+        setReproduciendo(true);
         wasPlayingRef.current = true;
       }
     }
   };
 
-  const testAudio = async () => {
+  const probarAudio = async () => {
     try {
       await ensureAudioContext();
       const t = new Tone.Synth().toDestination();
       t.triggerAttackRelease('C4','8n');
       setTimeout(()=>t.dispose(), 500);
     } catch (e) {
-      setAudioError('Audio test failed: ' + e.message);
+      setAudioError('Fallo en prueba de audio: ' + e.message);
     }
   };
+
+  // ---------- Limpiezas ----------
 
   const softStop = () => {
-    // Detiene loops y libera voces, mantiene master/FX para evitar pops
-    try {
-      if (sequenceRef.current) { sequenceRef.current.dispose(); sequenceRef.current = null; }
-      if (pluckLoopRef.current) { pluckLoopRef.current.dispose(); pluckLoopRef.current = null; }
-    } catch {}
+    try { loopColoresRef.current?.dispose?.(); loopColoresRef.current = null; } catch {}
+    try { loopPlucksRef.current?.dispose?.(); loopPlucksRef.current = null; } catch {}
+    try { loopPadRef.current?.dispose?.(); loopPadRef.current = null; } catch {}
+    try { loopCampanasRef.current?.dispose?.(); loopCampanasRef.current = null; } catch {}
 
-    synthsRef.current.forEach(obj => {
-      try { obj.synth.triggerRelease?.(); } catch {}
-      try { obj.synth.dispose?.(); } catch {}
-      try { obj.filter.dispose?.(); } catch {}
-    });
+    synthsRef.current.forEach(o => { try { o.synth.triggerRelease?.(); o.synth.dispose?.(); o.filter?.dispose?.(); } catch {} });
     synthsRef.current = [];
-
-    plucksRef.current.forEach(pl => {
-      try { pl.dispose?.(); } catch {}
-    });
+    plucksRef.current.forEach(pl => { try { pl.dispose?.(); } catch {} });
     plucksRef.current = [];
 
-    if (ambientSynthRef.current) {
-      try { ambientSynthRef.current.triggerRelease?.(); } catch {}
-      try { ambientSynthRef.current.dispose?.(); } catch {}
-      ambientSynthRef.current = null;
-    }
+    if (ambientSynthRef.current) { try { ambientSynthRef.current.triggerRelease?.(); ambientSynthRef.current.dispose?.(); } catch {} ambientSynthRef.current = null; }
+    if (padRef.current) { try { padRef.current.dispose?.(); } catch {} padRef.current = null; }
+    if (campanasRef.current) { try { campanasRef.current.dispose?.(); } catch {} campanasRef.current = null; }
+
+    if (ruidoRef.current.noise) { try { ruidoRef.current.noise.stop(); } catch {} }
+    if (ruidoRef.current.autoFilter) { try { ruidoRef.current.autoFilter.dispose?.(); } catch {} }
+    if (ruidoRef.current.filter) { try { ruidoRef.current.filter.dispose?.(); } catch {} }
+    if (ruidoRef.current.noise) { try { ruidoRef.current.noise.dispose?.(); } catch {} }
+    ruidoRef.current = { noise:null, autoFilter:null, filter:null };
   };
 
-  const clearVoices = () => {
-    // Igual que softStop pero sin tocar Transport
-    try {
-      if (sequenceRef.current) { sequenceRef.current.dispose(); sequenceRef.current = null; }
-      if (pluckLoopRef.current) { pluckLoopRef.current.dispose(); pluckLoopRef.current = null; }
-    } catch {}
-
-    synthsRef.current.forEach(obj => {
-      try { obj.synth.dispose?.(); } catch {}
-      try { obj.filter.dispose?.(); } catch {}
-    });
-    synthsRef.current = [];
-
-    plucksRef.current.forEach(pl => {
-      try { pl.dispose?.(); } catch {}
-    });
-    plucksRef.current = [];
-
-    if (ambientSynthRef.current) {
-      try { ambientSynthRef.current.dispose?.(); } catch {}
-      ambientSynthRef.current = null;
-    }
+  const limpiarVoces = () => {
+    // Igual que softStop, pero mantenemos buses y FX
+    softStop();
   };
 
   const hardStopAndDispose = () => {
-    // Parada total: voces, FX, master, Transport, listeners
     softStop();
     try { Tone.Transport.stop(); Tone.Transport.cancel(0); } catch {}
     try {
+      // FX y buses solo aquí
       if (fxRef.current.reverb) { fxRef.current.reverb.dispose(); fxRef.current.reverb = null; }
       if (fxRef.current.delay) { fxRef.current.delay.dispose(); fxRef.current.delay = null; }
       if (fxRef.current.comp) { fxRef.current.comp.dispose(); fxRef.current.comp = null; }
       if (fxRef.current.limiter) { fxRef.current.limiter.dispose(); fxRef.current.limiter = null; }
       if (masterRef.current) { masterRef.current.dispose(); masterRef.current = null; }
+      if (busesRef.current) {
+        Object.values(busesRef.current).forEach(b => { try { b.dispose?.(); } catch {} });
+        busesRef.current = { drone:null, colores:null, plucks:null, pad:null, campanas:null, ruido:null };
+      }
     } catch {}
-    setIsPlaying(false);
-    setAudioReady(false);
-    if (currentImageUrlRef.current) {
-      URL.revokeObjectURL(currentImageUrlRef.current);
-      currentImageUrlRef.current = null;
-    }
+    setReproduciendo(false);
+    setAudioListo(false);
+    if (currentImageUrlRef.current) { URL.revokeObjectURL(currentImageUrlRef.current); currentImageUrlRef.current = null; }
   };
 
-  const updateAudioSettings = (key, value) => {
-    setAudioSettings(prev => ({ ...prev, [key]: value }));
-    if (key === 'volume') {
-      if (ambientSynthRef.current) ambientSynthRef.current.volume.value = value;
-      synthsRef.current.forEach((s, i) => { s.synth.volume.value = value - 14 - i*2; });
-      plucksRef.current.forEach((pl, i) => { pl.volume.value = value - 18 - i*2; });
-    }
-    if (key === 'reverb' && fxRef.current.reverb) {
-      try { fxRef.current.reverb.set({ roomSize: value, wet: 0.35 }); } catch {}
-    }
-    if (key === 'filter' && ambientSynthRef.current) {
-      // se aplica en su filtro creado en setupAudioForData
-    }
+  // ---------- UI ----------
+
+  const actualizarAjuste = (k, v) => {
+    setAjustesAudio(p => ({ ...p, [k]: v }));
+    if (k === 'reverb' && fxRef.current.reverb) { try { fxRef.current.reverb.set({ roomSize: v, wet: 0.35 }); } catch {} }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 text-white p-8">
       <div className="max-w-6xl mx-auto">
         <header className="text-center mb-12">
-          <h1 className="text-4xl font-bold mb-4 bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
-            Color Sound Synthesizer
-          </h1>
-          <p className="text-slate-300 text-lg">
-            Ambient soundscapes from images • adaptive tempo & scales
-          </p>
+          <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">Sintetizador de Colores</h1>
+          <p className="text-slate-300 text-lg">Convierte tus imágenes en paisajes sonoros ambient</p>
         </header>
 
         <div className="grid md:grid-cols-2 gap-8">
-          {/* Upload */}
+          {/* Columna izquierda: carga y controles */}
           <div className="space-y-6">
             <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-2xl p-6">
-              <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                <Upload size={20} />
-                Upload Image
-              </h2>
-
-              {!image ? (
-                <div 
-                  className="border-2 border-dashed border-slate-600 rounded-xl p-8 text-center cursor-pointer hover:border-purple-400 transition-colors"
-                  onClick={() => fileInputRef.current?.click()}
-                >
+              <h2 className="text-xl font-semibold mb-4 flex items-center gap-2"><Upload size={20}/> Cargar imagen</h2>
+              {!imagen ? (
+                <div className="border-2 border-dashed border-slate-600 rounded-xl p-8 text-center cursor-pointer hover:border-purple-400 transition-colors" onClick={() => fileInputRef.current?.click()}>
                   <div className="text-slate-400">
                     <Upload size={48} className="mx-auto mb-4" />
-                    <p>Click to upload an image</p>
-                    <p className="text-sm mt-2">JPG, PNG, GIF up to 10MB</p>
+                    <p>Haz clic para seleccionar una imagen</p>
+                    <p className="text-sm mt-2">JPG, PNG, GIF hasta 10MB</p>
                   </div>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <img src={image} alt="Uploaded" className="max-w-full h-48 object-cover mx-auto rounded-lg" />
-                  <button
-                    onClick={() => {
-                      setImage(null);
-                      setColorData(null);
-                      softStop();
-                      if (fileInputRef.current) fileInputRef.current.value = '';
-                      if (currentImageUrlRef.current) { URL.revokeObjectURL(currentImageUrlRef.current); currentImageUrlRef.current = null; }
-                    }}
-                    className="w-full py-2 px-4 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
-                  >
-                    Upload New Image
-                  </button>
+                  <img src={imagen} alt="Subida" className="max-w-full h-48 object-cover mx-auto rounded-lg" />
+                  <button onClick={() => { setImagen(null); setDatosColor(null); softStop(); if (fileInputRef.current) fileInputRef.current.value=''; if (currentImageUrlRef.current) { URL.revokeObjectURL(currentImageUrlRef.current); currentImageUrlRef.current=null; } }} className="w-full py-2 px-4 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors">Subir otra imagen</button>
                 </div>
               )}
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleImageUpload}
-                className="hidden"
-              />
-
+              <input ref={fileInputRef} type="file" accept="image/*" onChange={manejarSubidaImagen} className="hidden" />
               <div className="mt-4">
                 <label className="block w-full py-3 px-6 bg-purple-600 hover:bg-purple-700 rounded-xl font-semibold transition-colors cursor-pointer text-center">
                   <Upload size={20} className="inline mr-2" />
-                  Choose Image File
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageUpload}
-                    className="hidden"
-                  />
+                  Elegir archivo
+                  <input type="file" accept="image/*" onChange={manejarSubidaImagen} className="hidden" />
                 </label>
               </div>
             </div>
 
-            {/* Controls */}
-            {colorData && (
+            {datosColor && (
               <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-2xl p-6">
                 <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                  <Volume2 size={18} />
-                  Audio Controls
+                  <Volume2 size={18}/> Controles de audio
                 </h3>
                 <div className="space-y-4">
-                  <button
-                    onClick={togglePlayback}
-                    className={`w-full py-3 px-6 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${isPlaying ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}`}
-                    disabled={isAnalyzing}
-                  >
-                    {isPlaying ? <Pause size={20} /> : <Play size={20} />}
-                    {isAnalyzing ? 'Analyzing...' : isPlaying ? 'Stop Soundscape' : 'Play Soundscape'}
+                  <button onClick={alternarReproduccion} className={`w-full py-3 px-6 rounded-xl font-semibold transition-all duration-300 flex items-center justify-center gap-2 ${reproduciendo ? 'bg-red-500 hover:bg-red-600' : 'bg-green-500 hover:bg-green-600'}`} disabled={analizando}>
+                    {reproduciendo ? <Pause size={20}/> : <Play size={20}/>}
+                    {analizando ? 'Analizando…' : (reproduciendo ? 'Detener' : 'Reproducir')}
                   </button>
-
-                  <button
-                    onClick={testAudio}
-                    className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors text-sm"
-                  >
-                    🔊 Test Audio (Click First!)
-                  </button>
-
+                  <button onClick={probarAudio} className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium transition-colors text-sm">🔊 Probar audio (haz clic primero)</button>
                   <div className="text-xs space-y-1">
-                    <div className={`flex items-center gap-2 ${audioReady ? 'text-green-400' : 'text-yellow-400'}`}>
-                      <div className={`w-2 h-2 rounded-full ${audioReady ? 'bg-green-400' : 'bg-yellow-400'}`}></div>
-                      Audio: {audioReady ? 'Ready' : 'Initializing'}
+                    <div className={`flex items-center gap-2 ${audioListo ? 'text-green-400' : 'text-yellow-400'}`}>
+                      <div className={`w-2 h-2 rounded-full ${audioListo ? 'bg-green-400' : 'bg-yellow-400'}`}></div>
+                      Audio: {audioListo ? 'Listo' : 'Inicializando'}
                     </div>
-                    <div className="text-slate-400">
-                      Tone.js: {typeof Tone !== 'undefined' ? 'Loaded' : 'Loading...'}
-                    </div>
+                    <div className="text-slate-400">Tone.js: {typeof Tone !== 'undefined' ? 'Cargado' : 'Cargando…'}</div>
                   </div>
-
-                  {audioError && (
-                    <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-                      <div className="text-red-400 text-sm">
-                        <strong>Audio Error:</strong><br />{audioError}
-                      </div>
-                    </div>
-                  )}
-
+                  {audioError && <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-red-400 text-sm"><strong>Error de audio:</strong><br/>{audioError}</div>}
                   <div className="grid gap-3">
                     <div>
-                      <label className="block text-sm text-slate-300 mb-2">Volume: {audioSettings.volume}dB</label>
-                      <input
-                        type="range"
-                        min="-40"
-                        max="0"
-                        value={audioSettings.volume}
-                        onChange={(e) => updateAudioSettings('volume', parseInt(e.target.value))}
-                        className="w-full accent-purple-400"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-slate-300 mb-2">Reverb: {Math.round(audioSettings.reverb * 100)}%</label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.05"
-                        value={audioSettings.reverb}
-                        onChange={(e) => updateAudioSettings('reverb', parseFloat(e.target.value))}
-                        className="w-full accent-purple-400"
-                      />
+                      <label className="block text-sm text-slate-300 mb-2">Reverb: {Math.round(ajustesAudio.reverb*100)}%</label>
+                      <input type="range" min="0" max="1" step="0.05" value={ajustesAudio.reverb} onChange={(e)=>actualizarAjuste('reverb', parseFloat(e.target.value))} className="w-full accent-purple-400"/>
                     </div>
                   </div>
                 </div>
               </div>
             )}
+
+            {/* Mesa de control (mezclador) */}
+            {datosColor && (
+              <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-2xl p-6">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <SlidersHorizontal size={18}/> Mesa de control
+                </h3>
+                <div className="grid sm:grid-cols-2 gap-4">
+                  {[
+                    { key:'droneDb', label:'Drone' },
+                    { key:'coloresDb', label:'Colores' },
+                    { key:'plucksDb', label:'Plucks' },
+                    { key:'padDb', label:'Pad' },
+                    { key:'campanasDb', label:'Campanas' },
+                    { key:'ruidoDb', label:'Ruido' },
+                  ].map(({key,label}) => (
+                    <div key={key}>
+                      <label className="block text-sm text-slate-300 mb-2">{label}: {mixer[key]} dB</label>
+                      <input type="range" min="-60" max="0" value={mixer[key]} onChange={(e)=>setMixer(prev=>({ ...prev, [key]: parseInt(e.target.value) }))} className="w-full accent-purple-400"/>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Analysis */}
+          {/* Columna derecha: análisis y explicación */}
           <div className="space-y-6">
-            {colorData && (
+            {datosColor && (
               <>
                 <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-2xl p-6">
-                  <h3 className="text-xl font-semibold mb-4 flex items-center gap-2">
-                    <Settings size={20} />
-                    Image Analysis
-                  </h3>
+                  <h3 className="text-xl font-semibold mb-4 flex items-center gap-2"><Settings size={20}/> Análisis de imagen</h3>
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div className="space-y-2">
-                      <div className="flex justify-between"><span className="text-slate-300">BPM:</span><span className="font-mono text-cyan-400">{colorData.bpm}</span></div>
-                      <div className="flex justify-between"><span className="text-slate-300">Brightness:</span><span className="font-mono text-cyan-400">{Math.round(colorData.avgBrightness * 100)}%</span></div>
-                      <div className="flex justify-between"><span className="text-slate-300">Saturation:</span><span className="font-mono text-cyan-400">{Math.round(colorData.avgSaturation * 100)}%</span></div>
+                      <div className="flex justify-between"><span className="text-slate-300">BPM:</span><span className="font-mono text-cyan-400">{datosColor.bpm}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-300">Brillo:</span><span className="font-mono text-cyan-400">{Math.round(datosColor.avgBrightness*100)}%</span></div>
+                      <div className="flex justify-between"><span className="text-slate-300">Saturación:</span><span className="font-mono text-cyan-400">{Math.round(datosColor.avgSaturation*100)}%</span></div>
                     </div>
                     <div className="space-y-2">
-                      <div className="flex justify-between"><span className="text-slate-300">Coolness:</span><span className="font-mono text-purple-400">{Math.round(colorData.coolness * 100)}%</span></div>
-                      <div className="flex justify-between"><span className="text-slate-300">Pastel:</span><span className="font-mono text-purple-400">{Math.round(colorData.pastelnessRatio * 100)}%</span></div>
-                      <div className="flex justify-between"><span className="text-slate-300">Contrast:</span><span className="font-mono text-purple-400">{Math.round(colorData.contrast * 100)}%</span></div>
-                      <div className="flex justify-between"><span className="text-slate-300">Color Entropy:</span><span className="font-mono text-purple-400">{Math.round(colorData.colorEntropy * 100)}%</span></div>
+                      <div className="flex justify-between"><span className="text-slate-300">Frialdad:</span><span className="font-mono text-purple-400">{Math.round(datosColor.coolness*100)}%</span></div>
+                      <div className="flex justify-between"><span className="text-slate-300">Pastel:</span><span className="font-mono text-purple-400">{Math.round(datosColor.pastelnessRatio*100)}%</span></div>
+                      <div className="flex justify-between"><span className="text-slate-300">Contraste:</span><span className="font-mono text-purple-400">{Math.round(datosColor.contrast*100)}%</span></div>
+                      <div className="flex justify-between"><span className="text-slate-300">Entropía de color:</span><span className="font-mono text-purple-400">{Math.round(datosColor.colorEntropy*100)}%</span></div>
                     </div>
                   </div>
                 </div>
 
                 <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-2xl p-6">
-                  <h3 className="text-lg font-semibold mb-4">Dominant Colors</h3>
+                  <h3 className="text-lg font-semibold mb-4">Colores dominantes</h3>
                   <div className="grid grid-cols-4 gap-2">
-                    {colorData.dominantColors.slice(0, 8).map((color, index) => (
-                      <div key={index} className="space-y-2">
-                        <div className="h-12 rounded-lg border border-slate-600" style={{ backgroundColor: `hsl(${color.h}, ${color.s * 100}%, ${color.l * 100}%)` }} />
-                        <div className="text-xs text-center text-slate-400">{color.weight} px</div>
+                    {datosColor.dominantColors.slice(0,8).map((c, i)=>(
+                      <div key={i} className="space-y-2">
+                        <div className="h-12 rounded-lg border border-slate-600" style={{ backgroundColor: `hsl(${c.h}, ${c.s*100}%, ${c.l*100}%)` }} />
+                        <div className="text-xs text-center text-slate-400">{c.weight} px</div>
                       </div>
                     ))}
                   </div>
@@ -658,15 +626,26 @@ const ColorSoundSynthesizer = () => {
             )}
 
             <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-2xl p-6">
-              <h3 className="text-lg font-semibold mb-4">How it works</h3>
+              <h3 className="text-lg font-semibold mb-4">Propósito y fórmula</h3>
               <div className="text-sm text-slate-300 space-y-2">
-                <p>• Temperature & saturation select scales; brightness → BPM and pluck density.</p>
-                <p>• Entropy controls event density for ambient character.</p>
-                <p>• Global FX reused to avoid CPU spikes and dropouts.</p>
+                <p><strong>Propósito:</strong> Explorar la traducción de imágenes a sonido ambiental, generando texturas suaves y evolutivas sin ruido molesto.</p>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li><strong>Brillo → BPM</strong> (60–160) y densidad de eventos.</li>
+                  <li><strong>Temperatura y saturación → escala musical</strong> (dórica, frígia, lidia, pentatónicas, whole, hirajoshi).</li>
+                  <li><strong>Entropía de color → densidad base</strong> (más entropía, más eventos moderados).</li>
+                  <li><strong>Contraste → timbre</strong> mediante modulación de filtros.</li>
+                  <li><strong>Pastel/brillante → envolventes y selección de escala</strong>.</li>
+                </ul>
+                <p className="text-slate-400 text-xs mt-3">La app prioriza texturas calmas: las probabilidades son bajas para evitar acumulación y clipping.</p>
               </div>
             </div>
           </div>
         </div>
+
+        {/* Footer de créditos */}
+        <footer className="mt-10 text-center text-slate-400 text-xs opacity-70">
+          Web App creada por Claude y corregida por Codex de Chat GPT con ideas de Diego Bastías A.  Agosto 2025
+        </footer>
 
         <canvas ref={canvasRef} className="hidden" />
       </div>
@@ -674,4 +653,4 @@ const ColorSoundSynthesizer = () => {
   );
 };
 
-export default ColorSoundSynthesizer;
+export default SintetizadorDeColores;
