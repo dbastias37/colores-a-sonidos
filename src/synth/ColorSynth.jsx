@@ -52,8 +52,12 @@ export default function ColorSynth(){
   const seqK = useRef(null); const seqS = useRef(null); const seqH = useRef(null)
 
   // viz
-  const overlayRef = useRef(null); const overlayCanvasRef = useRef(null); const rafRef = useRef(null)
-  const particlesRef = useRef([]); const sizeRef = useRef({w:0,h:0})
+  const bgVizRef = useRef(null); const vizCanvasRef = useRef(null);
+
+  // ---------- Visualization (background orbs) ----------
+  const rafRef = useRef(null)
+  const particlesRef = useRef([])
+  const sizeRef = useRef({ w: 0, h: 0 })
 
   useEffect(()=>{
     // don't start audio yet (mobile policy)
@@ -308,9 +312,9 @@ export default function ColorSynth(){
 
   const makeDrumSeq = ({K,S,H,vK,vS,vH})=>{
     try{ seqK.current?.dispose?.(); seqS.current?.dispose?.(); seqH.current?.dispose?.(); }catch{}
-    seqK.current = new Tone.Sequence((t,step)=>{ if(K[step]) { kick.current?.triggerAttackRelease('C1','8n',t,vK[step]||.2); noteHit('drums'); emit(0, .6, .35, .6, 'c') } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
-    seqS.current = new Tone.Sequence((t,step)=>{ if(S[step]) { snare.current?.triggerAttackRelease('8n',t,vS[step]||.15); noteHit('drums'); emit(220,.6,.6,.55,'s') } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
-    seqH.current = new Tone.Sequence((t,step)=>{ if(H[step]) { hat.current?.triggerAttackRelease('16n',t,vH[step]||.1); noteHit('drums'); emit(55,.7,.7,.35,'s') } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
+    seqK.current = new Tone.Sequence((t,step)=>{ if(K[step]) { kick.current?.triggerAttackRelease('C1','8n',t,vK[step]||.2); noteHit('drums'); emit(0, .6, .35, .6) } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
+    seqS.current = new Tone.Sequence((t,step)=>{ if(S[step]) { snare.current?.triggerAttackRelease('8n',t,vS[step]||.15); noteHit('drums'); emit(220,.6,.6,.55) } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
+    seqH.current = new Tone.Sequence((t,step)=>{ if(H[step]) { hat.current?.triggerAttackRelease('16n',t,vH[step]||.1); noteHit('drums'); emit(55,.7,.7,.28) } }, Array.from({length:16},(_,i)=>i), '16n').start(0)
   }
 
   const startLoops = (d)=>{
@@ -335,7 +339,7 @@ export default function ColorSynth(){
           const nudge = (Math.random()-.5)*.02
           v.s.triggerAttackRelease(note, dur, time+nudge)
           noteHit('colores')
-          emit(v.color.h, v.color.s, v.color.l, .5, 'c')
+          emit(v.color.h, v.color.s, v.color.l, .5)
           ev++
         }
       })
@@ -351,7 +355,7 @@ export default function ColorSynth(){
         const nudge=(Math.random()-.5)*.02
         plucks.current[i].triggerAttack(note, time+nudge)
         noteHit('plucks')
-        emit(120+i*60, .5, .6, .45, 's')
+        emit(120+i*60, .5, .6, .45)
       }
     }, intPl).start(0)
 
@@ -364,7 +368,7 @@ export default function ColorSynth(){
         pad.current.triggerAttackRelease(root,'2n',time)
         if (Math.random()<.55) pad.current.triggerAttackRelease(fifth,'2n',time+.08)
         noteHit('pad')
-        emit(d.coolness>.5?180:30,.3,.5,.55,'r')
+        emit(d.coolness>.5?180:30,.3,.5,.55)
       }
     }, 8.5).start(0)
 
@@ -375,7 +379,7 @@ export default function ColorSynth(){
         const note = sc[(Math.random()*sc.length)|0].replace('3','5')
         bells.current.triggerAttackRelease(note, '8n', time)
         noteHit('bells')
-        emit(260,.5,.7,.5,'s')
+        emit(260,.5,.7,.5)
       }
     }, 2.8).start(0)
   }
@@ -426,51 +430,118 @@ export default function ColorSynth(){
   const softStop = ()=> stopAll()
   const hardStop = ()=>{ stopAll(); try{ Tone.Transport.stop(); Tone.Transport.cancel(0) }catch{}; stopViz(); if(preUrlRef.current){ URL.revokeObjectURL(preUrlRef.current); preUrlRef.current=null } }
 
-  // ---------- Visualization ----------
-  const startViz=()=>{
-    const overlay = overlayRef.current; const c = overlayCanvasRef.current
-    overlay.classList.add('show'); resizeViz()
-    const ctx = c.getContext('2d'); ctx.globalCompositeOperation='lighter'
+  const startViz = () => {
+    const holder = bgVizRef.current
+    const c = vizCanvasRef.current
+    if (!holder || !c) return
+
+    // asegúrate de que está detrás; si por algún motivo no se pinta, súbelo al frente
+    holder.classList.remove('front')
+    resizeViz()
+    const ctx = c.getContext('2d', { alpha: true })
+    const PI2 = Math.PI * 2
     cancelAnimationFrame(rafRef.current)
-    particlesRef.current.length=0
-    const loop=(t)=>{
-      const {w,h} = sizeRef.current
-      ctx.clearRect(0,0,w,h)
-      for (let i=particlesRef.current.length-1;i>=0;i--){
-        const p=particlesRef.current[i]
-        p.x+=p.vx; p.y+=p.vy; p.life-=.015; p.r*=.996
-        if (p.life<=0||p.r<=.5){ particlesRef.current.splice(i,1); continue }
-        ctx.beginPath()
-        if (p.shape==='r'){ ctx.strokeStyle=p.color; ctx.lineWidth=Math.max(.5,p.r*.05); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.stroke() }
-        else if (p.shape==='s'){ ctx.strokeStyle=p.color; ctx.lineWidth=1; ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+p.vx*6,p.y+p.vy*6); ctx.stroke() }
-        else { ctx.fillStyle=p.color; ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill() }
+    particlesRef.current.length = 0
+
+    const loop = (ts) => {
+      const { w, h } = sizeRef.current
+      if (w === 0 || h === 0) {
+        // si algo raro pasa, súbelo al frente
+        holder.classList.add('front')
       }
-      if (particlesRef.current.length>PERF.MAX_PARTICLES) particlesRef.current.splice(0, particlesRef.current.length-PERF.MAX_PARTICLES)
+      ctx.clearRect(0, 0, w, h)
+
+      // “viento leve” basado en senoides lentas (barato vs Perlin)
+      const t = ts * 0.0003
+      const windXBase = Math.sin(t) * 0.15
+      const windYBase = Math.cos(t * 0.8) * 0.10
+      const speedScale = 1.05 // +5% movimiento
+
+      for (let i = particlesRef.current.length - 1; i >= 0; i--) {
+        const p = particlesRef.current[i]
+        // campo de viento muy suave dependiente de posición
+        const windX = windXBase + Math.sin(p.y * 0.002 + t * 0.6) * 0.08
+        const windY = windYBase + Math.cos(p.x * 0.002 - t * 0.4) * 0.06
+        p.vx += windX * 0.02
+        p.vy += windY * 0.02
+
+        p.x += p.vx * speedScale
+        p.y += p.vy * speedScale
+        p.life -= 0.012
+        // “respiración” del radio
+        p.r = p.baseR * (0.92 + 0.08 * Math.sin(t * 2 + p.pulsePhase))
+
+        // recicla si sale de pantalla
+        if (p.life <= 0 || p.r <= 0.6 || p.x < -40 || p.y < -40 || p.x > w + 40 || p.y > h + 40) {
+          particlesRef.current.splice(i, 1)
+          continue
+        }
+
+        // ORB suave con radial-gradient
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r)
+        g.addColorStop(0, `hsla(${p.h|0}, ${Math.round(p.s*100)}%, ${Math.round(p.l*100)}%, ${0.35 * p.intensity})`)
+        g.addColorStop(1, `hsla(${p.h|0}, ${Math.round(p.s*100)}%, ${Math.round(p.l*100)}%, 0)`)
+        ctx.fillStyle = g
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, p.r, 0, PI2)
+        ctx.fill()
+      }
+
+      // cota superior
+      if (particlesRef.current.length > PERF.MAX_PARTICLES) {
+        particlesRef.current.splice(0, particlesRef.current.length - PERF.MAX_PARTICLES)
+      }
+
       rafRef.current = requestAnimationFrame(loop)
     }
+
     rafRef.current = requestAnimationFrame(loop)
   }
-  const stopViz=()=>{ cancelAnimationFrame(rafRef.current); overlayRef.current?.classList.remove('show'); particlesRef.current.length=0 }
-  const resizeViz=()=>{
-    const c=overlayCanvasRef.current; const scale=.6
-    c.width = Math.floor(window.innerWidth*scale); c.height = Math.floor(window.innerHeight*scale)
-    sizeRef.current = {w:c.width, h:c.height}
+
+  const stopViz = () => {
+    cancelAnimationFrame(rafRef.current)
+    rafRef.current = null
+    particlesRef.current.length = 0
   }
-  const emit=(h,s,l,intensity,shape)=>{
-    if (!overlayRef.current?.classList.contains('show')) return
-    const c = overlayCanvasRef.current; const {w,h:hh} = sizeRef.current
-    const x=Math.random()*w, y=Math.random()*hh
-    const ang=Math.random()*Math.PI*2, sp=(.35+intensity*.7)*(Math.random()*.5+.5)
-    const vx=Math.cos(ang)*sp, vy=Math.sin(ang)*sp
-    const r=2+intensity*8*(Math.random()*.6+.7)
-    const a=.16+.24*Math.min(1,intensity)
-    const color=`hsla(${Math.round(h)}, ${Math.round(s*100)}%, ${Math.round(l*100)}%, ${a})`
-    particlesRef.current.push({x,y,vx,vy,r,life:1.1+intensity*.7,color,shape})
+
+  const resizeViz = () => {
+    const c = vizCanvasRef.current
+    if (!c) return
+    const scale = 0.66
+    c.width = Math.floor(window.innerWidth * scale)
+    c.height = Math.floor(window.innerHeight * scale)
+    sizeRef.current = { w: c.width, h: c.height }
+  }
+
+  // emisor de orbes (se llama desde eventos musicales)
+  const emit = (h, s, l, intensity = 0.5) => {
+    const c = vizCanvasRef.current
+    if (!c) return
+    const { w, h: H } = sizeRef.current
+    // semilla en borde para que “entren” flotando
+    const side = Math.random()
+    let x, y, vx, vy
+    if (side < 0.25) { x = -20; y = Math.random() * H; vx = 0.6 + Math.random() * 0.6; vy = (Math.random() - 0.5) * 0.4 }
+    else if (side < 0.5) { x = w + 20; y = Math.random() * H; vx = -(0.6 + Math.random() * 0.6); vy = (Math.random() - 0.5) * 0.4 }
+    else if (side < 0.75) { x = Math.random() * w; y = -20; vx = (Math.random() - 0.5) * 0.4; vy = 0.6 + Math.random() * 0.6 }
+    else { x = Math.random() * w; y = H + 20; vx = (Math.random() - 0.5) * 0.4; vy = -(0.6 + Math.random() * 0.6) }
+
+    const baseR = 10 + intensity * 22 * (0.6 + Math.random() * 0.8)
+    particlesRef.current.push({
+      x, y,
+      vx, vy,
+      r: baseR,
+      baseR,
+      life: 1.3 + intensity * 0.9,
+      pulsePhase: Math.random() * Math.PI * 2,
+      h, s, l,
+      intensity
+    })
   }
 
   return (
     <div className="container">
-      <div ref={overlayRef} className="overlay"><canvas ref={overlayCanvasRef}></canvas></div>
+      <div ref={bgVizRef} className="bgViz"><canvas ref={vizCanvasRef}></canvas></div>
       <header className="header">
         <h1 className="h1">Sintetizador de Colores</h1>
         <p className="p">Convierte tus imágenes en sonido ambiental. Primero sube una imagen y luego toca “Probar audio” o “Reproducir”.</p>
