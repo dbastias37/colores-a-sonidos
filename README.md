@@ -1,14 +1,10 @@
-# Sintetizador de Colores (visual + drums + mixer, **PERF**)
+# Sintetizador de Colores – **PERF v3** (anti pantalla blanca)
 
-- Optimizaciones agresivas de CPU/Memoria
-  - Limpieza total de nodos/loops/secuencias al cambiar imagen (sin fugas).
-  - Reutiliza FX y buses; voz máxima por tick; cap de partículas; overlay adaptativo.
-  - Análisis de imagen con `createImageBitmap` (cuando existe) + downsampling adaptativo y bins de 12°.
-  - Revoke de object URLs y abort flags para análisis concurrentes.
-  - Transporte con `swing` y latencia ajustada; eventos micro-desfasados.
-- Cobertura de color más amplia (+4 highlights brillantes asegurados).
-- Más dinamismo musical: swing, microtiming, octavas, prob. ligadas a tono/sat/entropía.
-- UI Montserrat + visualizador en vivo.
+### Cambios clave para evitar “pantalla blanca”
+- **ErrorBoundary** en React + listeners `error` / `unhandledrejection` con mensaje visible.
+- **Pantalla de pre-carga** (preboot) que se oculta cuando React monta; si hay fallo, muestra el error.
+- **Fallback CSS** en `index.html` (fondo oscuro) por si Tailwind no carga.
+- Mantiene todas las optimizaciones de memoria/CPU y el espectro de color ampliado.
 
 ## Local
 ```bash

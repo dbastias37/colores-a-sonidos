@@ -7,9 +7,30 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+      /* Fallback mínimo por si Tailwind no carga, evita fondo blanco */
+      html, body, #root { height: 100%; }
+      body { background: radial-gradient(1200px 800px at 50% 0%, #1f2344 0%, #0b1020 60%, #0b0f1a 100%); color: #e5e7eb; font-family: 'Montserrat', system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+      .preboot { position: fixed; inset: 0; display: grid; place-items: center; color: #a5b4fc; font-weight: 600; letter-spacing: .3px; }
+      .preboot.hidden { display: none; }
+      noscript { position: fixed; inset: 0; background:#0b1020; color:#fff; display:grid; place-items:center; padding:2rem; text-align:center; }
+    </style>
   </head>
   <body class="min-h-screen">
     <div id="root"></div>
+    <div id="preboot" class="preboot">Cargando…</div>
+    <noscript>Esta app necesita JavaScript. Actívalo para continuar.</noscript>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      // Oculta el preboot cuando React monta
+      window.__hidePreboot = () => { const el = document.getElementById('preboot'); if (el) el.classList.add('hidden'); };
+      // Captura errores globales y los muestra en pantalla en lugar de pantalla blanca
+      window.addEventListener('error', (e)=>{
+        const el = document.getElementById('preboot'); if (el) { el.classList.remove('hidden'); el.textContent = 'Error: ' + (e?.error?.message || e.message || 'Desconocido'); }
+      });
+      window.addEventListener('unhandledrejection', (e)=>{
+        const el = document.getElementById('preboot'); if (el) { el.classList.remove('hidden'); el.textContent = 'Error Promesa: ' + (e?.reason?.message || String(e.reason) || 'Desconocido'); }
+      });
+    </script>
   </body>
 </html>
