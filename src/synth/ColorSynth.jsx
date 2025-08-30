@@ -52,9 +52,7 @@ export default function ColorSynth(){
   const seqK = useRef(null); const seqS = useRef(null); const seqH = useRef(null)
 
   // viz
-  const bgVizRef = useRef(null); const vizCanvasRef = useRef(null);
-
-  // ---------- Visualization (background orbs) ----------
+  const portalCanvasRef = useRef(null)   // nodo <canvas> real en el portal
   const rafRef = useRef(null)
   const particlesRef = useRef([])
   const sizeRef = useRef({ w: 0, h: 0 })
@@ -67,8 +65,28 @@ export default function ColorSynth(){
       else if (wasPlayingRef.current) { try { await Tone.context.resume(); Tone.Transport.start() } catch {} }
     }
     document.addEventListener('visibilitychange', onVis)
-    window.addEventListener('resize', resizeViz)
-    return ()=>{ document.removeEventListener('visibilitychange', onVis); window.removeEventListener('resize', resizeViz); hardStop() }
+    return ()=>{ document.removeEventListener('visibilitychange', onVis); hardStop() }
+  }, [])
+
+  useEffect(()=>{
+    // Monta un canvas una sola vez en #bg-viz-portal
+    const portal = document.getElementById('bg-viz-portal')
+    if (portal && !portalCanvasRef.current) {
+      const c = document.createElement('canvas')
+      portal.innerHTML = ''            // limpia cualquier canvas previo
+      portal.appendChild(c)
+      portalCanvasRef.current = c
+    }
+    const onResize = () => resizeViz()
+    window.addEventListener('resize', onResize)
+    return () => {
+      stopViz()
+      window.removeEventListener('resize', onResize)
+      if (portalCanvasRef.current?.parentNode) {
+        portalCanvasRef.current.parentNode.removeChild(portalCanvasRef.current)
+      }
+      portalCanvasRef.current = null
+    }
   }, [])
 
   useEffect(()=>{
@@ -431,12 +449,8 @@ export default function ColorSynth(){
   const hardStop = ()=>{ stopAll(); try{ Tone.Transport.stop(); Tone.Transport.cancel(0) }catch{}; stopViz(); if(preUrlRef.current){ URL.revokeObjectURL(preUrlRef.current); preUrlRef.current=null } }
 
   const startViz = () => {
-    const holder = bgVizRef.current
-    const c = vizCanvasRef.current
-    if (!holder || !c) return
-
-    // asegúrate de que está detrás; si por algún motivo no se pinta, súbelo al frente
-    holder.classList.remove('front')
+    const c = portalCanvasRef.current
+    if (!c) return
     resizeViz()
     const ctx = c.getContext('2d', { alpha: true })
     const PI2 = Math.PI * 2
@@ -445,21 +459,16 @@ export default function ColorSynth(){
 
     const loop = (ts) => {
       const { w, h } = sizeRef.current
-      if (w === 0 || h === 0) {
-        // si algo raro pasa, súbelo al frente
-        holder.classList.add('front')
-      }
       ctx.clearRect(0, 0, w, h)
 
-      // “viento leve” basado en senoides lentas (barato vs Perlin)
+      // “viento” muy leve y +5% movimiento
       const t = ts * 0.0003
       const windXBase = Math.sin(t) * 0.15
       const windYBase = Math.cos(t * 0.8) * 0.10
-      const speedScale = 1.05 // +5% movimiento
+      const speedScale = 1.05
 
       for (let i = particlesRef.current.length - 1; i >= 0; i--) {
         const p = particlesRef.current[i]
-        // campo de viento muy suave dependiente de posición
         const windX = windXBase + Math.sin(p.y * 0.002 + t * 0.6) * 0.08
         const windY = windYBase + Math.cos(p.x * 0.002 - t * 0.4) * 0.06
         p.vx += windX * 0.02
@@ -468,16 +477,13 @@ export default function ColorSynth(){
         p.x += p.vx * speedScale
         p.y += p.vy * speedScale
         p.life -= 0.012
-        // “respiración” del radio
         p.r = p.baseR * (0.92 + 0.08 * Math.sin(t * 2 + p.pulsePhase))
 
-        // recicla si sale de pantalla
         if (p.life <= 0 || p.r <= 0.6 || p.x < -40 || p.y < -40 || p.x > w + 40 || p.y > h + 40) {
           particlesRef.current.splice(i, 1)
           continue
         }
 
-        // ORB suave con radial-gradient
         const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r)
         g.addColorStop(0, `hsla(${p.h|0}, ${Math.round(p.s*100)}%, ${Math.round(p.l*100)}%, ${0.35 * p.intensity})`)
         g.addColorStop(1, `hsla(${p.h|0}, ${Math.round(p.s*100)}%, ${Math.round(p.l*100)}%, 0)`)
@@ -487,11 +493,11 @@ export default function ColorSynth(){
         ctx.fill()
       }
 
-      // cota superior
-      if (particlesRef.current.length > PERF.MAX_PARTICLES) {
-        particlesRef.current.splice(0, particlesRef.current.length - PERF.MAX_PARTICLES)
+      // cota
+      const MAX = 700
+      if (particlesRef.current.length > MAX) {
+        particlesRef.current.splice(0, particlesRef.current.length - MAX)
       }
-
       rafRef.current = requestAnimationFrame(loop)
     }
 
@@ -505,7 +511,7 @@ export default function ColorSynth(){
   }
 
   const resizeViz = () => {
-    const c = vizCanvasRef.current
+    const c = portalCanvasRef.current
     if (!c) return
     const scale = 0.66
     c.width = Math.floor(window.innerWidth * scale)
@@ -513,12 +519,10 @@ export default function ColorSynth(){
     sizeRef.current = { w: c.width, h: c.height }
   }
 
-  // emisor de orbes (se llama desde eventos musicales)
+  // Emisor de orbes: llama con h,s,l,intensity desde tus disparos musicales
   const emit = (h, s, l, intensity = 0.5) => {
-    const c = vizCanvasRef.current
-    if (!c) return
     const { w, h: H } = sizeRef.current
-    // semilla en borde para que “entren” flotando
+    if (!w || !H) return
     const side = Math.random()
     let x, y, vx, vy
     if (side < 0.25) { x = -20; y = Math.random() * H; vx = 0.6 + Math.random() * 0.6; vy = (Math.random() - 0.5) * 0.4 }
@@ -528,20 +532,16 @@ export default function ColorSynth(){
 
     const baseR = 10 + intensity * 22 * (0.6 + Math.random() * 0.8)
     particlesRef.current.push({
-      x, y,
-      vx, vy,
-      r: baseR,
-      baseR,
+      x, y, vx, vy,
+      r: baseR, baseR,
       life: 1.3 + intensity * 0.9,
       pulsePhase: Math.random() * Math.PI * 2,
-      h, s, l,
-      intensity
+      h, s, l, intensity
     })
   }
 
   return (
     <div className="container">
-      <div ref={bgVizRef} className="bgViz"><canvas ref={vizCanvasRef}></canvas></div>
       <header className="header">
         <h1 className="h1">Sintetizador de Colores</h1>
         <p className="p">Convierte tus imágenes en sonido ambiental. Primero sube una imagen y luego toca “Probar audio” o “Reproducir”.</p>
