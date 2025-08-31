@@ -9,26 +9,45 @@ const PERF = { LOOK_AHEAD: 0.05, MAX_EVENTS_PER_TICK: 10, MAX_SYNTH_VOICES: 8, I
 const hsl = (h,s,l)=>`hsl(${h}, ${Math.round(s*100)}%, ${Math.round(l*100)}%)`
 const clamp = (v,a,b)=>Math.max(a,Math.min(b,v))
 
-const SCALES = {
-  feliz: {
-    ionian:   ['C3','D3','E3','F3','G3','A3','B3','C4'],
-    lydian:   ['C3','D3','E3','F#3','G3','A3','B3','C4']
-  },
-  triste: {
-    aeolian:  ['C3','D3','Eb3','F3','G3','Ab3','Bb3','C4'],
-    dorian:   ['C3','D3','Eb3','F3','G3','A3','Bb3','C4']
-  }
+const SCALES_OFFSETS = {
+  ionian:        [0,2,4,5,7,9,11],        // mayor
+  lydian:        [0,2,4,6,7,9,11],        // #4
+  mixolydian:    [0,2,4,5,7,9,10],        // b7
+  dorian:        [0,2,3,5,7,9,10],        // menor + 6
+  aeolian:       [0,2,3,5,7,8,10],        // natural minor
+  phrygian:      [0,1,3,5,7,8,10],        // b2
+  melodicMinor:  [0,2,3,5,7,9,11],        // menor melódica asc.
+  majorPent:     [0,2,4,7,9],
+  minorPent:     [0,3,5,7,10]
 }
 
-function chooseScale(m, d) {
-  if (m==='feliz') return d.avgBrightness>0.55 ? SCALES.feliz.lydian : SCALES.feliz.ionian
-  return d.avgSaturation>0.45 ? SCALES.triste.dorian : SCALES.triste.aeolian
+function offsetsForHue(h, mood){
+  h = ((h%360)+360)%360
+  if (h < 30)    return merge([SCALES_OFFSETS.lydian, SCALES_OFFSETS.ionian, SCALES_OFFSETS.majorPent])
+  if (h < 60)    return merge([SCALES_OFFSETS.ionian, SCALES_OFFSETS.mixolydian, SCALES_OFFSETS.majorPent])
+  if (h < 120)   return merge([SCALES_OFFSETS.mixolydian, SCALES_OFFSETS.ionian])
+  if (h < 180)   return merge([SCALES_OFFSETS.dorian, SCALES_OFFSETS.minorPent])      // verdes
+  if (h < 210)   return merge([SCALES_OFFSETS.aeolian, SCALES_OFFSETS.dorian])        // cian/teal
+  if (h < 255)   return merge([SCALES_OFFSETS.phrygian, SCALES_OFFSETS.aeolian])      // azules
+  if (h < 315)   return merge([SCALES_OFFSETS.melodicMinor, SCALES_OFFSETS.dorian])   // púrpuras/magenta
+  return            merge([SCALES_OFFSETS.lydian, SCALES_OFFSETS.ionian])
 }
 
-function noteForColor(h, scaleArr){
-  if (!scaleArr?.length) return '—'
-  const idx = Math.floor((h % 360) / (360/scaleArr.length))
-  return scaleArr[idx]
+function merge(arrOfOffsets){
+  const s = new Set()
+  arrOfOffsets.flat().forEach(o=>s.add(o))
+  return Array.from(s).sort((a,b)=>a-b)
+}
+
+function buildScaleFromOffsets(rootNote, offsets){
+  const f = Tone.Frequency(rootNote)
+  return offsets.map(semi => f.transpose(semi).toNote())
+}
+
+function noteForColor(h, pool){
+  if (!pool?.length) return '—'
+  const idx = Math.floor((h % 360) / (360/pool.length))
+  return pool[idx]
 }
 
 export default function ColorSynth(){
@@ -43,15 +62,22 @@ export default function ColorSynth(){
   const imgBoxRef = useRef(null)
 
   const mood = data ? (data.coolness < 0.5 ? 'feliz' : 'triste') : 'feliz'
-  const scale = data ? chooseScale(mood, data) : []
   const strong = data ? data.dominantColors.filter(c=>c.s>.55 && c.l>.25 && c.l<.8) : []
   const uniqueHues = strong.length ? new Set(strong.map(c=>c.h)).size : 0
   const richness = data ? uniqueHues / Math.max(1, data.dominantColors.length) : 0
   const energy = data ? Math.min(1, 0.4 + data.avgSaturation*0.4 + richness*0.6) : 0
   const caracter = energy > 0.65 ? 'estruendoso' : 'calmo'
+  const rootNote = (mood==='feliz')?'C3':'A2'
+  const scalePool = data ? (()=>{ const hA = data.dominantColors[0]?.h ?? 0; const hB = data.dominantColors[1]?.h ?? hA; const offs = merge([ offsetsForHue(hA, mood), offsetsForHue(hB, mood) ]); return buildScaleFromOffsets(rootNote, offs) })() : []
 
   // mixer
-  const [mix, setMix] = useState({ drone:-18, pad:-14 })
+  const [mix, setMix] = useState({ drone:-12, pad:-8 })
+  const busGainsRef = useRef({ drone: null, pad: null })
+
+  function applyUserMix(key, db){ // llamado SOLO desde onChange del slider
+    const node = busGainsRef.current[key]
+    if (node) node.gain.value = Tone.dbToGain(db)
+  }
 
   const fileRef = useRef(null)
   const canvasRef = useRef(null)
@@ -143,13 +169,6 @@ export default function ColorSynth(){
 
   function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms) } }
 
-  useEffect(()=>{
-    const B = buses.current
-    const setDb = (g,db)=>g?.gain?.rampTo(Tone.dbToGain(db),0.05)
-    if (!B.drone) return
-    setDb(B.drone, mix.drone)
-    setDb(B.pad, mix.pad)
-  },[mix])
 
   useEffect(() => {
     const box = imgBoxRef.current
@@ -167,7 +186,7 @@ export default function ColorSynth(){
   const setupAudioGraph = () => {
     if (fx.current.master) return
     const master = new Tone.Gain(1)
-    const makeup = new Tone.Gain(Tone.dbToGain(3)) // ~+3 dB
+    const makeup = new Tone.Gain(Tone.dbToGain(4)) // +1 dB extra
     const comp = new Tone.Compressor(-20, 3)
     const limiter = new Tone.Limiter(-1)
     master.chain(makeup, comp, limiter, Tone.Destination)
@@ -176,6 +195,7 @@ export default function ColorSynth(){
       drone: new Tone.Gain(Tone.dbToGain(mix.drone)),
       pad:   new Tone.Gain(Tone.dbToGain(mix.pad))
     }
+    busGainsRef.current = { drone: buses.current.drone, pad: buses.current.pad }
     Object.values(buses.current).forEach(b => b.chain(fx.current.delay, fx.current.reverb, fx.current.master))
   }
 
@@ -313,14 +333,39 @@ export default function ColorSynth(){
       Tone.Transport.swing = Math.min(.35, Math.max(0, d.avgSaturation*.3))
       Tone.Transport.swingSubdivision = '8n'
 
-      ambient.current = new Tone.Synth({
+      // Capa 1: seno base (fundamental)
+      const droneSine = new Tone.Synth({
         oscillator:{ type:'sine' },
-        envelope:{ attack:2.5, decay:1.2, sustain:.9, release:3.5 }
+        envelope:{ attack:1.8, decay:1.0, sustain:.95, release:3.8 }
       })
-      const lp = new Tone.Filter({ frequency: 900 + energy*600, type:'lowpass' })
-      ambient.current.chain(lp, buses.current.drone)
-      ambient.current.volume.value = -18
-      ambient.current.triggerAttack((mood==='feliz')?'C2':'G1')
+      // Capa 2: triángulo suave un pelín desafinado para “cuerpo”
+      const droneTri = new Tone.Synth({
+        oscillator:{ type:'triangle' },
+        envelope:{ attack:2.2, decay:1.2, sustain:.85, release:3.8 }
+      })
+      const detune = (5 + energy*7) // cents
+      droneTri.detune.value = detune
+
+      // Filtros/efectos muy sutiles para claridad y aire
+      const eq = new Tone.EQ3({ low:-1, mid:0, high:+2 }) // un poco de brillo
+      const hp = new Tone.Filter({ frequency: 40, type:'highpass' }) // quita “rumble”
+      const lp = new Tone.Filter({ frequency: 1200 + energy*800, type:'lowpass' })
+      const chorus = new Tone.Chorus({ frequency: 0.15, delayTime: 4, depth: 0.2, wet: 0.2 }).start()
+
+      // mezcla de capas → filtros → bus drone
+      const mixDrone = new Tone.Gain(0.9)
+      droneSine.connect(mixDrone)
+      droneTri.connect(mixDrone)
+      mixDrone.chain(hp, lp, eq, chorus, buses.current.drone)
+
+      ambient.current = { sine: droneSine, tri: droneTri, out: mixDrone }
+      // un poco más fuerte que antes:
+      droneSine.volume.value = -12
+      droneTri.volume.value  = -12
+
+      const rootNoteDrone = (mood==='feliz')?'C2':'G1'
+      ambient.current.sine.triggerAttack(rootNoteDrone)
+      ambient.current.tri.triggerAttack(rootNoteDrone)
 
       const padVoices = 6
       pad.current = new Tone.PolySynth(Tone.AMSynth, {
@@ -329,10 +374,11 @@ export default function ColorSynth(){
         options: { envelope:{ attack:1.2, decay:1, sustain:.9, release:4.2 } }
       }).connect(buses.current.pad)
 
-      const scale = chooseScale(mood, d)
-      const hueToDegree = h => Math.floor((h % 360) / (360/scale.length))
-      const rootIdx = hueToDegree(d.dominantColors[0]?.h || 0)
-      const root = Tone.Frequency(scale[rootIdx]).toNote()
+      const root = (mood==='feliz')?'C3':'A2'
+      const hA = d.dominantColors[0]?.h ?? 0
+      const hB = d.dominantColors[1]?.h ?? hA
+      const offs = merge([ offsetsForHue(hA, mood), offsetsForHue(hB, mood) ])
+      const scalePool = buildScaleFromOffsets(root, offs)
 
       function chordFrom(rootNote, m, e) {
         const f = Tone.Frequency(rootNote)
@@ -359,7 +405,7 @@ export default function ColorSynth(){
       arpLoop.current?.dispose?.()
       arpLoop.current = new Tone.Loop((time)=>{
         const base = chordFrom(root, mood, energy)
-        const n = base[(Math.random()*base.length)|0]
+        const n = scalePool[(Math.random()*scalePool.length)|0]
         const durn = (Math.random()<.5)?'8n':'4n'
         const nudge = (Math.random()-.5)*0.02
         pad.current.triggerAttackRelease(n, durn, time+nudge, 0.45)
@@ -410,7 +456,16 @@ export default function ColorSynth(){
   const stopAll = ()=>{
     try{ padLoop.current?.dispose?.(); padLoop.current=null }catch{}
     try{ arpLoop.current?.dispose?.(); arpLoop.current=null }catch{}
-    if (ambient.current){ try{ ambient.current.triggerRelease?.(); ambient.current.dispose?.() }catch{}; ambient.current=null }
+    if (ambient.current){
+      try{
+        ambient.current.sine.triggerRelease?.()
+        ambient.current.tri.triggerRelease?.()
+        ambient.current.sine.dispose?.()
+        ambient.current.tri.dispose?.()
+        ambient.current.out.dispose?.()
+      }catch{}
+      ambient.current=null
+    }
     if (pad.current){ try{ pad.current.dispose?.() }catch{}; pad.current=null }
     try{ Tone.Transport.cancel(0) }catch{}
   }
@@ -579,7 +634,7 @@ export default function ColorSynth(){
                 {Object.entries(mix).map(([k,v])=>(
                   <div key={k} style={{minWidth:200}}>
                     <label className="label">{k.replace(/([A-Z])/g,' $1')}: {v} dB</label>
-                    <input className="range" type="range" min="-60" max="0" value={v} onChange={(e)=>setMix(m=>({...m,[k]:parseInt(e.target.value)}))}/>
+                    <input className="range" type="range" min="-60" max="0" value={v} onChange={(e)=>{ const val=parseInt(e.target.value,10); setMix(m=>({...m,[k]:val})); applyUserMix(k, val) }} />
                   </div>
                 ))}
               </div>
@@ -607,7 +662,7 @@ export default function ColorSynth(){
                         background:`hsl(${c.h} ${c.s*100}% ${c.l*100}%)`
                       }} />
                       <div className="small">
-                        {noteForColor(c.h, scale)} • {mood==='feliz' ? (data.avgBrightness>0.55?'Lidia':'Jónica') : (data.avgSaturation>0.45?'Dórica':'Eólica')}
+                        {noteForColor(c.h, scalePool)}
                       </div>
                     </div>
                   ))}
