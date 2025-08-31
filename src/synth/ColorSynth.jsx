@@ -73,39 +73,75 @@ export default function ColorSynth(){
   const portalCanvasRef = useRef(null)   // nodo <canvas> real en el portal
   const rafRef = useRef(null)
   const particlesRef = useRef([])
-  const sizeRef = useRef({ w: 0, h: 0 })
+  const sizeRef = useRef({ w: 0, h: 0, dpr: 1 })
+  const ctxRef = useRef(null)
+  const vizStateRef = useRef({ running:false, lastTime:0, _acc:0 })
+  const poolRef = useRef([])
+  const workerRef = useRef(null)
+
+  const SPR = {
+    RADII: [12, 16, 20, 24, 28, 32],
+    CACHE: new Map(),
+  }
+  function spriteKey(h,s,l,r){ return `${Math.round(h)}|${Math.round(s*100)}|${Math.round(l*100)}|${r}` }
+  function getSprite(h,s,l,baseR){
+    const r = SPR.RADII.reduce((a,b)=> Math.abs(b-baseR)<Math.abs(a-baseR)?b:a, SPR.RADII[0])
+    const key = spriteKey(h,s,l,r)
+    const cached = SPR.CACHE.get(key)
+    if (cached) return cached
+    const size = r*2
+    const off = (typeof OffscreenCanvas!=='undefined') ? new OffscreenCanvas(size, size) : document.createElement('canvas')
+    off.width=size; off.height=size
+    const c = off.getContext('2d')
+    const g = c.createRadialGradient(r, r, 0, r, r, r)
+    g.addColorStop(0, `hsla(${h|0}, ${Math.round(s*100)}%, ${Math.round(l*100)}%, 0.55)`)
+    g.addColorStop(1, `hsla(${h|0}, ${Math.round(s*100)}%, ${Math.round(l*100)}%, 0)`)
+    c.fillStyle = g
+    c.beginPath(); c.arc(r,r,r,0,Math.PI*2); c.fill()
+    SPR.CACHE.set(key, off)
+    return off
+  }
+
+  function allocParticle(){ return poolRef.current.pop() || {} }
+  function freeParticle(p){ poolRef.current.push(p) }
 
   useEffect(()=>{
-    // don't start audio yet (mobile policy)
-    try { const ctx = Tone.getContext(); ctx.lookAhead = PERF.LOOK_AHEAD; ctx.latencyHint = 'interactive' } catch{}
-    const onVis = async () => {
-      if (document.visibilityState !== 'visible') { try { Tone.Transport.pause() } catch {} ; stopViz() }
-      else if (wasPlayingRef.current) { try { await Tone.context.resume(); Tone.Transport.start() } catch {} }
-    }
-    document.addEventListener('visibilitychange', onVis)
-    return ()=>{ document.removeEventListener('visibilitychange', onVis); hardStop() }
+    try{ workerRef.current = new Worker(new URL('../workers/analyze.worker.js', import.meta.url), { type:'module' }) }catch{}
+    return ()=>{ workerRef.current?.terminate(); workerRef.current=null }
+  },[])
+
+  useEffect(()=>{
+    try { const ctx = Tone.getContext(); ctx.lookAhead = PERF.LOOK_AHEAD; ctx.latencyHint = 'balanced' } catch{}
+    return ()=>{ hardStop() }
   }, [])
 
   useEffect(()=>{
-    // Monta un canvas una sola vez en #bg-viz-portal
     const portal = document.getElementById('bg-viz-portal')
     if (portal && !portalCanvasRef.current) {
       const c = document.createElement('canvas')
-      portal.innerHTML = ''            // limpia cualquier canvas previo
+      portal.innerHTML = ''
       portal.appendChild(c)
       portalCanvasRef.current = c
     }
-    const onResize = () => resizeViz()
-    window.addEventListener('resize', onResize)
+    const onResize = debounce(()=>resizeViz(),120)
+    window.addEventListener('resize', onResize, { passive:true })
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') { vizStateRef.current.running=false }
+      else { vizStateRef.current.running=true; vizStateRef.current.lastTime=performance.now(); rafRef.current=requestAnimationFrame(t=>loop(t)) }
+    }
+    document.addEventListener('visibilitychange', onVis)
     return () => {
       stopViz()
       window.removeEventListener('resize', onResize)
+      document.removeEventListener('visibilitychange', onVis)
       if (portalCanvasRef.current?.parentNode) {
         portalCanvasRef.current.parentNode.removeChild(portalCanvasRef.current)
       }
       portalCanvasRef.current = null
     }
   }, [])
+
+  function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms) } }
 
   useEffect(()=>{
     const B = buses.current
@@ -144,11 +180,10 @@ export default function ColorSynth(){
   }
 
   // ---------- Image analysis ----------
-  const analyzeImage = async (file)=>{
+  const analyzeImageLegacy = async (file)=>{
     abortRef.current.aborted = true
     abortRef.current = {aborted:false}
     const local = abortRef.current
-    setAnalyzing(true)
     try{
       const canvas = canvasRef.current
       const ctx = canvas.getContext('2d', {willReadFrequently:true})
@@ -167,10 +202,9 @@ export default function ColorSynth(){
       const swing = Math.min(.35, Math.max(0, stats.avgSaturation*.3))
       Tone.Transport.swing = swing; Tone.Transport.swingSubdivision='8n'
       const result = {...stats, dominantColors: merged, bpm}
-      setData(result)
       return result
     }catch(e){ setErr('Análisis: '+(e.message||String(e))); return null }
-    finally{ setAnalyzing(false); if (preUrlRef.current) { URL.revokeObjectURL(preUrlRef.current); preUrlRef.current=null } }
+    finally{ if (preUrlRef.current) { URL.revokeObjectURL(preUrlRef.current); preUrlRef.current=null } }
   }
 
   const loadImg = (file, local)=>new Promise((resolve)=>{
@@ -181,6 +215,21 @@ export default function ColorSynth(){
     if (preUrlRef.current) URL.revokeObjectURL(preUrlRef.current)
     preUrlRef.current = u
     img.src = u
+  })
+
+  const analyzeWithWorker = (file) => new Promise(async (resolve,reject)=>{
+    if (!workerRef.current) return reject(new Error('sin worker'))
+    try{
+      const bitmap = await createImageBitmap(file, { resizeWidth: 768, resizeHeight: 768, resizeQuality: 'high' })
+      const w = workerRef.current
+      const onMsg = (ev)=>{
+        const m = ev.data
+        w.removeEventListener('message', onMsg)
+        if (m.ok) resolve(m.data); else reject(new Error(m.error))
+      }
+      w.addEventListener('message', onMsg)
+      w.postMessage({ fileOrBitmap: bitmap })
+    }catch(err){ reject(err) }
   })
   const getW = (file)=>new Promise(r=>{ const i=new Image(); i.onload=()=>r(i.width); i.src=URL.createObjectURL(file) })
   const getH = (file)=>new Promise(r=>{ const i=new Image(); i.onload=()=>r(i.height); i.src=URL.createObjectURL(file) })
@@ -273,7 +322,7 @@ export default function ColorSynth(){
       ambient.current.volume.value = -18
       ambient.current.triggerAttack((mood==='feliz')?'C2':'G1')
 
-      const padVoices = Math.round(4 + energy*2)
+      const padVoices = 6
       pad.current = new Tone.PolySynth(Tone.AMSynth, {
         maxPolyphony: padVoices,
         volume: Tone.gainToDb(0.4),
@@ -334,7 +383,16 @@ export default function ColorSynth(){
     if (imgURL) URL.revokeObjectURL(imgURL)
     setImgURL(URL.createObjectURL(f))
     stopAll()
-    const d = await analyzeImage(f); if (!d) return
+    setAnalyzing(true)
+    try{
+      const d = await analyzeWithWorker(f)
+      setData(d)
+    }catch{
+      const d = await analyzeImageLegacy(f)
+      if (d) setData(d)
+    }finally{
+      setAnalyzing(false)
+    }
   }
 
   const togglePlay = async ()=>{
@@ -354,6 +412,7 @@ export default function ColorSynth(){
     try{ arpLoop.current?.dispose?.(); arpLoop.current=null }catch{}
     if (ambient.current){ try{ ambient.current.triggerRelease?.(); ambient.current.dispose?.() }catch{}; ambient.current=null }
     if (pad.current){ try{ pad.current.dispose?.() }catch{}; pad.current=null }
+    try{ Tone.Transport.cancel(0) }catch{}
   }
   const softStop = ()=> stopAll()
   const hardStop = ()=>{ stopAll(); try{ Tone.Transport.stop(); Tone.Transport.cancel(0) }catch{}; stopViz(); if(preUrlRef.current){ URL.revokeObjectURL(preUrlRef.current); preUrlRef.current=null } }
@@ -362,22 +421,37 @@ export default function ColorSynth(){
     const c = portalCanvasRef.current
     if (!c) return
     resizeViz()
-    const ctx = c.getContext('2d', { alpha: true })
-    const PI2 = Math.PI * 2
+    ctxRef.current = c.getContext('2d', { alpha: true })
     cancelAnimationFrame(rafRef.current)
     particlesRef.current.length = 0
     if (data?.dominantColors) {
       data.dominantColors.forEach(c=>emit(c.h, c.s, c.l, 0.6))
     }
+    vizStateRef.current.running = true
+    vizStateRef.current.lastTime = performance.now()
+    rafRef.current = requestAnimationFrame(loop)
+  }
 
-    const loop = (ts) => {
-      const { w, h } = sizeRef.current
-      ctx.globalCompositeOperation = 'source-over'
-      ctx.fillStyle = 'rgba(4, 8, 20, 0.08)' // ~20% menos opaco
-      ctx.fillRect(0, 0, w, h)
+  function loop(ts){
+    const ctx = ctxRef.current
+    if (!ctx){ rafRef.current = requestAnimationFrame(loop); return }
+    const vs = vizStateRef.current
+    if (!vs.running){ rafRef.current = requestAnimationFrame(loop); return }
+    const { w, h } = sizeRef.current
+    const dt = (ts - (vs.lastTime || ts)) / 1000
+    vs.lastTime = ts
+    vs._acc = (vs._acc || 0) + dt
+    const minStep = 1/60, target = 1/45
+    if (vs._acc < minStep){ rafRef.current=requestAnimationFrame(loop); return }
+    const steps = Math.min(3, Math.floor(vs._acc / target))
+    vs._acc -= steps*target
 
-      // “viento” muy leve y +5% movimiento
-      const t = ts * 0.0003
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.fillStyle = 'rgba(4, 8, 20, 0.08)'
+    ctx.fillRect(0,0,w,h)
+
+    for(let s=0; s<steps; s++){
+      const t = (ts - vs._acc*1000 + s*target*1000) * 0.0003
       const windXBase = Math.sin(t) * 0.15
       const windYBase = Math.cos(t * 0.8) * 0.10
       const speedScale = 1.05
@@ -393,42 +467,39 @@ export default function ColorSynth(){
         const windY = windYBase + Math.cos(p.x * 0.002 - t * 0.4) * 0.06
         p.vx += windX * 0.02
         p.vy += windY * 0.02
-
         p.x += p.vx * speedScale
         p.y += p.vy * speedScale
         p.life -= 0.012
         p.r = p.baseR * (0.92 + 0.08 * Math.sin(t * 2 + p.pulsePhase))
-
         if (p.life <= 0 || p.r <= 0.6 || p.x < -40 || p.y < -40 || p.x > w + 40 || p.y > h + 40) {
-          particlesRef.current.splice(i, 1)
-          continue
+          const last = particlesRef.current.pop()
+          if (i < particlesRef.current.length) particlesRef.current[i] = last
+          freeParticle(p)
         }
-
-        // mezcla aditiva para más brillo suaves (glow)
-        ctx.globalCompositeOperation = 'lighter'
-        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r)
-        g.addColorStop(0, `hsla(${p.h|0}, ${Math.round(p.s*100)}%, ${Math.round(p.l*100)}%, ${Math.min(0.6, 0.35 * p.intensity * VISIBLE_BOOST)})`)
-        g.addColorStop(1, `hsla(${p.h|0}, ${Math.round(p.s*100)}%, ${Math.round(p.l*100)}%, 0)`)
-        ctx.fillStyle = g
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, p.r, 0, PI2)
-        ctx.fill()
       }
+    }
 
-      // cota
-      const MAX = 700
-      if (particlesRef.current.length > MAX) {
-        particlesRef.current.splice(0, particlesRef.current.length - MAX)
-      }
-      // vuelve al modo normal para el próximo velo
-      ctx.globalCompositeOperation = 'source-over'
-      rafRef.current = requestAnimationFrame(loop)
+    ctx.globalCompositeOperation = 'lighter'
+    for (let i=0;i<particlesRef.current.length;i++){
+      const p = particlesRef.current[i]
+      const spr = getSprite(p.h, p.s, p.l, p.baseR)
+      const w2 = p.r*2
+      ctx.globalAlpha = Math.min(0.6, 0.35 * p.intensity * VISIBLE_BOOST)
+      ctx.drawImage(spr, p.x - p.r, p.y - p.r, w2, w2)
+    }
+    ctx.globalAlpha = 1
+    ctx.globalCompositeOperation = 'source-over'
+
+    const MAX = PERF.MAX_PARTICLES || 700
+    if (particlesRef.current.length > MAX) {
+      particlesRef.current.length = MAX
     }
 
     rafRef.current = requestAnimationFrame(loop)
   }
 
   const stopViz = () => {
+    vizStateRef.current.running = false
     cancelAnimationFrame(rafRef.current)
     rafRef.current = null
     particlesRef.current.length = 0
@@ -437,10 +508,11 @@ export default function ColorSynth(){
   const resizeViz = () => {
     const c = portalCanvasRef.current
     if (!c) return
+    const DPR = Math.min(window.devicePixelRatio || 1, (/Mobi|Android/i.test(navigator.userAgent)? 1.25 : 1.5))
     const scale = 0.66
-    c.width = Math.floor(window.innerWidth * scale)
-    c.height = Math.floor(window.innerHeight * scale)
-    sizeRef.current = { w: c.width, h: c.height }
+    c.width = Math.floor(window.innerWidth * scale * DPR)
+    c.height = Math.floor(window.innerHeight * scale * DPR)
+    sizeRef.current = { w: c.width, h: c.height, dpr: DPR }
   }
 
   // Emisor de orbes: llama con h,s,l,intensity desde tus disparos musicales
@@ -455,13 +527,13 @@ export default function ColorSynth(){
     else { x = Math.random() * w; y = H + 20; vx = (Math.random() - 0.5) * 0.4; vy = -(0.6 + Math.random() * 0.6) }
 
     const baseR = 10 + intensity * 22 * (0.6 + Math.random() * 0.8)
-    particlesRef.current.push({
-      x, y, vx, vy,
-      r: baseR, baseR,
-      life: 1.3 + intensity * 0.9,
-      pulsePhase: Math.random() * Math.PI * 2,
-      h, s, l, intensity
-    })
+    const p = allocParticle()
+    p.x = x; p.y = y; p.vx = vx; p.vy = vy
+    p.r = baseR; p.baseR = baseR
+    p.life = 1.3 + intensity * 0.9
+    p.pulsePhase = Math.random() * Math.PI * 2
+    p.h = h; p.s = s; p.l = l; p.intensity = intensity
+    particlesRef.current.push(p)
   }
 
   return (
@@ -484,7 +556,7 @@ export default function ColorSynth(){
             ):(
               <div>
                 <div ref={imgBoxRef} className="imgBox" style={{ '--ratio': imgRatio }}>
-                  <img className="img" src={imgURL} alt="subida" onLoad={onImgLoad}/>
+                  <img className="img" src={imgURL} alt="subida" decoding="async" fetchpriority="high" loading="eager" onLoad={onImgLoad}/>
                 </div>
                 <div className="row" style={{marginTop:10}}>
                   <button className="btn secondary" onClick={()=>{ if(imgURL) URL.revokeObjectURL(imgURL); setImgURL(null); setData(null); stopAll(); stopViz(); if(fileRef.current) fileRef.current.value='' }}>Subir otra</button>
