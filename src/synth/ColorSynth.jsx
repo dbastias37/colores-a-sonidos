@@ -554,19 +554,60 @@ export default function ColorSynth(){
       {showHelp && (
         <div style={{position:'fixed',inset:0,zIndex:60,background:'rgba(0,0,0,.45)',display:'grid',placeItems:'center'}} onClick={()=>setShowHelp(false)}>
           <div className="card" style={{maxWidth:780, width:'92%', padding:'18px 20px'}} onClick={(e)=>e.stopPropagation()}>
-            <h3>Cómo funciona</h3>
-            <div className="p" style={{textAlign:'left'}}>
-              <ul style={{margin:'8px 0 0 18px'}}>
-                <li><b>Análisis 200%</b>: muestreamos más denso y agrupamos por <i>bins</i> de 6°; además buscamos <em>acentos</em> brillantes.</li>
-                <li><b>Feliz/Triste</b>: colores cálidos → Jónica/Lidia; fríos → Eólica/Dórica.</li>
-                <li><b>Calmo/Estruendoso</b>: si hay muchos colores fuertes distintos, sube la densidad y el brillo del Pad; si no, se calma.</li>
-                <li><b>Drone</b>: raíz grave estable que respira con filtros.</li>
-                <li><b>Pad</b>: acordes con tensiones (6/9/7) y micro-arpegios; duplicamos el dinamismo sin salir del ambient.</li>
-                <li><b>Colores → Notas</b>: cada matiz (hue) cae en un grado de la escala; lo verás bajo cada swatch.</li>
-                <li>El audio <b>no se corta</b> al abrir/cerrar este panel.</li>
+            <h3 style={{margin:'0 0 8px'}}>Cómo funciona</h3>
+
+            <div className="p" style={{textAlign:'left', lineHeight:1.55}}>
+              <p><strong>Propósito.</strong> Esta herramienta experimental busca <em>expandir el mundo sonoro</em> traduciendo imágenes a <strong>armonías y texturas</strong>. Lo hace mediante <strong>asimilaciones de acordes</strong> y reglas <strong>matemático–musicales</strong>: así como el <em>matiz</em> del color es un ángulo en un círculo (0–360°), la <em>altura musical</em> se organiza en un ciclo de 12 pasos (octava). Ambos son espacios cíclicos, por eso podemos asociar un tono de color con un grado de una escala.</p>
+
+              <h4 style={{margin:'14px 0 6px'}}>¿Qué medimos en la imagen?</h4>
+              <ul style={{margin:'0 0 10px 18px'}}>
+                <li><strong>N.º de colores</strong> (<code>N_col</code>): agrupamos el matiz en <code>bins</code> de 6° y contamos cuántos grupos relevantes hay.</li>
+                <li><strong>Brillo promedio</strong> (<code>L</code>, 0–1): desde el canal de luminancia (HSL).</li>
+                <li><strong>Saturación promedio</strong> (<code>S</code>, 0–1): cuánta “pureza” cromática hay.</li>
+                <li><strong>Claridad / Contraste</strong>: diferencia de luminosidad entre colores dominantes.</li>
+                <li><strong>Entropía de color</strong> (<code>H</code>, 0–100%): dispersión del histograma de matices; más entropía = paleta más diversa.</li>
+                <li><strong>Colores fuertes</strong>: aquellos con <code>S &gt; 0.55</code> y <code>0.25 &lt; L &lt; 0.8</code>.</li>
               </ul>
+
+              <h4 style={{margin:'12px 0 6px'}}>Color → Música (intuición matemática)</h4>
+              <ul style={{margin:'0 0 10px 18px'}}>
+                <li><strong>Matiz → Grado de escala</strong>: si la escala tiene <code>M</code> notas, usamos
+                  <br/><code>i = round((h / 360) * M) mod M</code>, y mapeamos al grado <code>scale[i]</code>.
+                </li>
+                <li><strong>Saturación → Brillo/actividad del Pad</strong>: mayor <code>S</code> ⇒ más movimiento (micro–arpegios) y timbre un poco más “abierto”.</li>
+                <li><strong>Brillo → BPM</strong>: <code>BPM = round(60 + L * 100)</code> (≈ 60–160). Imágenes más claras ⇒ más ágiles.</li>
+                <li><strong>Temperatura (cálido/frío) → Modo feliz/triste</strong>:
+                  <ul>
+                    <li>Predominan cálidos ⇒ <em>feliz</em>: Jónica/Lidia (mayor, más luminosa).</li>
+                    <li>Predominan fríos ⇒ <em>triste</em>: Eólica/Dórica (menor, más introspectiva).</li>
+                  </ul>
+                </li>
+                <li><strong>Riqueza cromática (entropía + n.º de colores fuertes) → Carácter</strong>:
+                  <ul>
+                    <li>Alta riqueza ⇒ <em>más estruendoso</em> (más densidad armónica dentro del ambient).</li>
+                    <li>Baja riqueza ⇒ <em>más calmo</em> (ciclos largos y estables).</li>
+                  </ul>
+                </li>
+              </ul>
+
+              <h4 style={{margin:'12px 0 6px'}}>Reglas prácticas (si… entonces…)</h4>
+              <ul style={{margin:'0 0 10px 18px'}}>
+                <li><strong>Si la imagen tiene muchos colores fuertes</strong> (<code>N_col</code> alto y <code>H</code> &gt; 60%) ⇒ el Pad agrega tensiones (6/9/7) y micro–arpegios un poco más frecuentes, pero sin salir del sonido ambiental.</li>
+                <li><strong>Si la imagen es oscura</strong> (<code>L</code> &lt; 0.4) ⇒ BPM cercanos a 60–80, acordes más sostenidos.</li>
+                <li><strong>Si la imagen es muy clara</strong> (<code>L</code> ≥ 0.6) ⇒ BPM cercanos a 120–150, respiración del filtro más rápida.</li>
+                <li><strong>Si dominan tonos fríos</strong> ⇒ modo menor (Eólica/Dórica); <strong>si dominan cálidos</strong> ⇒ modo mayor (Jónica/Lidia).</li>
+                <li><strong>Si el contraste es alto</strong> ⇒ más “profundidad” del filtro del Drone para resaltar capas.</li>
+              </ul>
+
+              <h4 style={{margin:'12px 0 6px'}}>De un color a una nota (resumen)</h4>
+              <p>Tomamos el <em>ángulo</em> del color (<code>h</code>) en el círculo cromático y lo proyectamos al círculo musical (la escala elegida). Al ser ambos <em>ciclos</em>, la asociación es coherente: <code>h</code> se convierte en un <em>grado</em> que el Pad toca dentro del modo (<em>feliz</em> o <em>triste</em>). El Drone sostiene la raíz grave y “respira” con filtro, de modo que todo permanezca <strong>ambiental</strong> pero con <strong>dinamismo musical</strong>.</p>
+
+              <div style={{marginTop:10, fontSize:12, opacity:.85}}>
+                <em>Nota:</em> esta es una aproximación artística–matemática; no “colorea” grabaciones existentes, sino que <strong>compone</strong> un paisaje sonoro a partir de la paleta de tu imagen.
+              </div>
             </div>
-            <div style={{textAlign:'right', marginTop:10}}>
+
+            <div style={{textAlign:'right', marginTop:12}}>
               <button className="btn" onClick={()=>setShowHelp(false)}>Cerrar</button>
             </div>
           </div>
