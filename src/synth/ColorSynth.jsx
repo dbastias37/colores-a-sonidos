@@ -84,6 +84,7 @@ export default function ColorSynth(){
   const preUrlRef = useRef(null)
   const abortRef = useRef({aborted:false})
   const wasPlayingRef = useRef(false)
+  const isResettingRef = useRef(false)
   const prerollRef   = useRef({ buffer:null, player:null })
   const xfadeRef     = useRef({ a:null, b:null })  // buses de crossfade
   const masterLiveRef= useRef(null)                // salida del motor vivo
@@ -107,6 +108,21 @@ export default function ColorSynth(){
   const vizStateRef = useRef({ running:false, lastTime:0, _acc:0 })
   const poolRef = useRef([])
   const workerRef = useRef(null)
+
+  // ---------- helpers de dispose ----------
+  function safeDispose(node){ try{ node?.dispose?.() }catch{} }
+  function disconnect(node){ try{ node?.disconnect?.() }catch{} }
+
+  // Limpia el canvas del portal
+  function clearPortalCanvas(){
+    try{
+      const c = portalCanvasRef?.current
+      if (c){
+        const ctx = c.getContext('2d')
+        ctx?.clearRect(0,0,c.width,c.height)
+      }
+    }catch{}
+  }
 
   const SPR = {
     RADII: [12, 16, 20, 24, 28, 32],
@@ -502,6 +518,11 @@ export default function ColorSynth(){
 
   const onUpload = async (e)=>{
     const f = e.target.files?.[0]; if (!f||!f.type.startsWith('image/')) return
+    if (!workerRef.current){
+      try{
+        workerRef.current = new Worker(new URL('../workers/analyze.worker.js', import.meta.url), { type:'module' })
+      }catch{}
+    }
     if (imgURL) URL.revokeObjectURL(imgURL)
     setImgURL(URL.createObjectURL(f))
     stopAll()
@@ -570,6 +591,82 @@ export default function ColorSynth(){
   }
   const softStop = ()=> stopAll()
   const hardStop = ()=>{ stopAll(); try{ Tone.Transport.stop(); Tone.Transport.cancel(0) }catch{}; stopViz(); if(preUrlRef.current){ URL.revokeObjectURL(preUrlRef.current); preUrlRef.current=null } }
+
+  async function hardResetApp(keepAudioCtx = true){
+    if (isResettingRef.current) return
+    isResettingRef.current = true
+    try{
+      // 1) Audio programado
+      try{
+        Tone.Transport.stop()
+        Tone.Transport.cancel(0)
+      }catch{}
+
+      // 2) Detener TODO lo creado por nosotros
+      try{
+        // Loops del pad / arpegio
+        try{ padLoop?.current?.dispose?.() }catch{}
+        try{ arpLoop?.current?.dispose?.() }catch{}
+
+        // Drone (dos capas en la versión actual)
+        try{ ambient.current?.sine?.triggerRelease?.() }catch{}
+        try{ ambient.current?.tri?.triggerRelease?.() }catch{}
+        safeDispose(ambient.current?.sine)
+        safeDispose(ambient.current?.tri)
+        ambient.current = null
+
+        // Pad
+        safeDispose(pad.current); pad.current = null
+
+        // FX y buses (no toques sliders/state)
+        disconnect(buses.current?.drone); disconnect(buses.current?.pad)
+        safeDispose(buses.current?.drone); safeDispose(buses.current?.pad)
+        buses.current = {}
+
+        // Master/fx si los recreas cada play (si los reúsas, omite dispose)
+        safeDispose(fx.current?.reverb)
+        safeDispose(fx.current?.delay)
+        safeDispose(fx.current?.comp)
+        safeDispose(fx.current?.makeup)
+        safeDispose(fx.current?.limiter)
+        safeDispose(fx.current?.master)
+        fx.current = {}
+      }catch{}
+
+      // 3) Pre-buffer / crossfade
+      try{ disposePreroll() }catch{}
+
+      // 4) Visual autónomo
+      try{ stopViz() }catch{}
+      clearPortalCanvas()
+      try{ particlesRef.current.length = 0 }catch{}
+      try{ poolRef?.current && (poolRef.current.length = 0) }catch{}
+      try{ SPR?.CACHE?.clear?.() }catch{}
+
+      // 5) Worker de análisis
+      try{ workerRef.current?.terminate?.(); workerRef.current = null }catch{}
+
+      // 6) Blob/URL anteriores
+      try{
+        if (imgURL) { URL.revokeObjectURL(imgURL) }
+        if (preUrlRef?.current){ URL.revokeObjectURL(preUrlRef.current); preUrlRef.current = null }
+      }catch{}
+
+      // 7) Estado de UI (sin mover sliders)
+      setData(null)
+      setImgURL(null)
+      setPlaying(false)
+      wasPlayingRef.current = false
+      if (fileRef.current) fileRef.current.value = ''
+
+      // 8) AudioContext: opcional suspender para ahorrar CPU (no lo cierres)
+      if (!keepAudioCtx){
+        try{ await Tone.getContext().rawContext.suspend() }catch{}
+      }
+    }finally{
+      isResettingRef.current = false
+    }
+  }
 
   const startViz = () => {
     const c = portalCanvasRef.current
@@ -713,7 +810,13 @@ export default function ColorSynth(){
                   <img className="img" src={imgURL} alt="subida" decoding="async" fetchpriority="high" loading="eager" onLoad={onImgLoad}/>
                 </div>
                 <div className="row" style={{marginTop:10}}>
-                  <button className="btn secondary" onClick={()=>{ if(imgURL) URL.revokeObjectURL(imgURL); setImgURL(null); setData(null); stopAll(); stopViz(); if(fileRef.current) fileRef.current.value='' }}>Subir otra</button>
+                  <button
+                    className="btn secondary"
+                    onClick={async ()=>{
+                      await hardResetApp(true)
+                      fileRef.current?.click()
+                    }}
+                  >Subir otra</button>
                   {/* Visual se maneja automáticamente al reproducir/detener */}
                 </div>
               </div>
