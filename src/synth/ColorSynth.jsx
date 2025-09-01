@@ -3,7 +3,7 @@ import * as Tone from 'tone'
 import { Upload, Play, Pause } from 'lucide-react'
 
 // PERF constants
-const PERF = { LOOK_AHEAD: 0.05, MAX_EVENTS_PER_TICK: 10, MAX_SYNTH_VOICES: 8, IMG_MAX_SIZE: 180, SAMPLE_STRIDE: 20, MAX_PARTICLES: 700 }
+const PERF = { LOOK_AHEAD: 0.10, MAX_EVENTS_PER_TICK: 10, MAX_SYNTH_VOICES: 8, IMG_MAX_SIZE: 180, SAMPLE_STRIDE: 20, MAX_PARTICLES: 700 }
 
 // Helpers
 const hsl = (h,s,l)=>`hsl(${h}, ${Math.round(s*100)}%, ${Math.round(l*100)}%)`
@@ -84,6 +84,9 @@ export default function ColorSynth(){
   const preUrlRef = useRef(null)
   const abortRef = useRef({aborted:false})
   const wasPlayingRef = useRef(false)
+  const prerollRef   = useRef({ buffer:null, player:null })
+  const xfadeRef     = useRef({ a:null, b:null })  // buses de crossfade
+  const masterLiveRef= useRef(null)                // salida del motor vivo
 
   // audio nodes/buses
   const fx = useRef({})
@@ -189,7 +192,9 @@ export default function ColorSynth(){
     const makeup = new Tone.Gain(Tone.dbToGain(4)) // +1 dB extra
     const comp = new Tone.Compressor(-20, 3)
     const limiter = new Tone.Limiter(-1)
-    master.chain(makeup, comp, limiter, Tone.Destination)
+    master.chain(makeup, comp, limiter)
+    limiter.connect(Tone.Destination)
+    masterLiveRef.current = limiter
     fx.current = { master, makeup, comp, limiter, reverb: new Tone.Reverb({roomSize:.32, wet:.30}), delay: new Tone.FeedbackDelay({delayTime:'8n', feedback:.20, wet:.12}) }
     buses.current = {
       drone: new Tone.Gain(Tone.dbToGain(mix.drone)),
@@ -197,6 +202,77 @@ export default function ColorSynth(){
     }
     busGainsRef.current = { drone: buses.current.drone, pad: buses.current.pad }
     Object.values(buses.current).forEach(b => b.chain(fx.current.delay, fx.current.reverb, fx.current.master))
+  }
+
+  async function renderPrerollOffline(data, rootNote, chordNotes, dur = 2.2){
+    const buffer = await Tone.Offline(({ transport }) => {
+      const out = new Tone.Gain(1).toDestination()
+
+      const droneSine = new Tone.Synth({ oscillator:{type:'sine'}, envelope:{attack:1.2,decay:.6,sustain:.95,release:3.2} }).connect(out)
+      const droneTri  = new Tone.Synth({ oscillator:{type:'triangle'}, envelope:{attack:1.4,decay:.8,sustain:.85,release:3.2} }).connect(out)
+      droneTri.detune.value = 8
+
+      const pad = new Tone.PolySynth(Tone.AMSynth, {
+        maxPolyphony: 6,
+        options:{ envelope:{ attack:1.0, decay:.9, sustain:.9, release:3.8 } }
+      }).connect(out)
+
+      // disparos
+      droneSine.triggerAttack(rootNote, 0)
+      droneTri.triggerAttack(rootNote, 0)
+      chordNotes.forEach((n,i)=> pad.triggerAttackRelease(n, '2n', 0.12 + i*0.02, 0.7))
+
+      transport.start(0)
+    }, dur)
+
+    return buffer
+  }
+
+  async function buildPreroll(data){
+    try{
+      const mood = (data.coolness < 0.5) ? 'feliz' : 'triste'
+      const rootNote = (mood==='feliz') ? 'C2' : 'G1'
+      const chordNotes = ['C3','E3','G3','B3']
+      const audioBuffer = await renderPrerollOffline(data, rootNote, chordNotes, 2.2)
+
+      disposePreroll()
+      const player = new Tone.Player({
+        url: audioBuffer,
+        autostart: false,
+        loop: false,
+        fadeIn: 0.02,
+        fadeOut: 0.15
+      })
+
+      const a = new Tone.Gain(1).toDestination()
+      const b = new Tone.Gain(0).toDestination()
+      player.connect(a)
+
+      prerollRef.current = { buffer: audioBuffer, player }
+      xfadeRef.current = { a, b }
+
+      if (masterLiveRef.current){
+        masterLiveRef.current.disconnect()
+        masterLiveRef.current.connect(b)
+      }
+    }catch(e){
+      disposePreroll()
+      console.warn('Preroll offline falló (seguimos sin preroll):', e)
+    }
+  }
+
+  function disposePreroll(){
+    try{ prerollRef.current.player?.dispose() }catch{}
+    try{ xfadeRef.current.a?.dispose() }catch{}
+    try{ xfadeRef.current.b?.dispose() }catch{}
+    try{
+      if (masterLiveRef.current){
+        masterLiveRef.current.disconnect()
+        masterLiveRef.current.connect(Tone.Destination)
+      }
+    }catch{}
+    prerollRef.current = { buffer:null, player:null }
+    xfadeRef.current   = { a:null, b:null }
   }
 
   // ---------- Image analysis ----------
@@ -433,9 +509,10 @@ export default function ColorSynth(){
     try{
       const d = await analyzeWithWorker(f)
       setData(d)
+      buildPreroll(d)
     }catch{
       const d = await analyzeImageLegacy(f)
-      if (d) setData(d)
+      if (d){ setData(d); buildPreroll(d) }
     }finally{
       setAnalyzing(false)
     }
@@ -443,9 +520,30 @@ export default function ColorSynth(){
 
   const togglePlay = async ()=>{
     if (!data) return
-    if (playing){ stopAll(); stopViz(); Tone.Transport.stop(); setPlaying(false); wasPlayingRef.current=false; return }
+    if (playing){ stopAll(); stopViz(); Tone.Transport.stop(); setPlaying(false); wasPlayingRef.current=false; disposePreroll(); return }
     const ok = await setupFromData(data)
-    if (ok){ startViz(); Tone.Transport.start(); setPlaying(true); wasPlayingRef.current=true; }
+    if (ok){
+      const now = Tone.now()
+      const pr = prerollRef.current.player
+      const a = xfadeRef.current.a, b = xfadeRef.current.b
+      if (pr && a && b){
+        try{
+          pr.start(now)
+          Tone.Transport.start(now + 0.12)
+          a.gain.setValueAtTime(1, now)
+          b.gain.setValueAtTime(0, now)
+          a.gain.linearRampTo(0, 1.2, now + 0.12)
+          b.gain.linearRampTo(1, 1.2, now + 0.12)
+          setTimeout(()=>{ disposePreroll() }, 1600)
+        }catch{
+          Tone.Transport.start(now + 0.05)
+        }
+      }else{
+        Tone.Transport.start(now + 0.05)
+      }
+      startViz()
+      setPlaying(true); wasPlayingRef.current=true;
+    }
   }
 
   const testAudio = async ()=>{
@@ -468,6 +566,7 @@ export default function ColorSynth(){
     }
     if (pad.current){ try{ pad.current.dispose?.() }catch{}; pad.current=null }
     try{ Tone.Transport.cancel(0) }catch{}
+    disposePreroll()
   }
   const softStop = ()=> stopAll()
   const hardStop = ()=>{ stopAll(); try{ Tone.Transport.stop(); Tone.Transport.cancel(0) }catch{}; stopViz(); if(preUrlRef.current){ URL.revokeObjectURL(preUrlRef.current); preUrlRef.current=null } }
