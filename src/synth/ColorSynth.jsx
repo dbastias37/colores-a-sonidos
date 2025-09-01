@@ -50,6 +50,92 @@ function noteForColor(h, pool){
   return pool[idx]
 }
 
+// ---------- Director de Armonía ----------
+const HARM = {
+  // offsets diatónicos / modales
+  SCALES: {
+    ionian:       [0,2,4,5,7,9,11],
+    lydian:       [0,2,4,6,7,9,11],
+    mixolydian:   [0,2,4,5,7,9,10],
+    dorian:       [0,2,3,5,7,9,10],
+    aeolian:      [0,2,3,5,7,8,10],
+    phrygian:     [0,1,3,5,7,8,10],
+    melodicMinor: [0,2,3,5,7,9,11],
+  },
+  // progresiones por modo (grados romanos)
+  PROG: {
+    mayor: [
+      ['I','vi','IV','V'],
+      ['I','V','vi','IV'],
+      ['I','III','vi','IV'],
+      ['I','ii','V','I'],
+    ],
+    menor: [
+      ['i','VI','III','VII'],
+      ['i','iv','VII','III'],
+      ['i','ii°','V','i'],
+      ['i','VII','VI','VII'],
+    ],
+    modalWarm: [
+      ['I','II','V','I'],
+      ['I','V','II','I'],
+    ],
+    modalCool: [
+      ['i','VII','IV','i'],
+      ['i','IV','VII','i'],
+    ],
+  },
+  DEG: {
+    'I':  [0,4,7,11], 'ii':[2,5,9], 'ii°':[2,5,8], 'iii':[4,7,11],
+    'IV':[5,9,12], 'V':[7,11,14], 'vi':[9,12,16], 'vii°':[11,14,17],
+    'i':[0,3,7,10], 'iv':[5,8,12], 'v':[7,10,14], 'VI':[8,12,15],
+    'III':[3,7,10], 'VII':[10,14,17], 'II':[2,6,9]
+  }
+}
+
+function hueFamily(h){
+  h = ((h%360)+360)%360
+  if (h<30) return 'mayor'
+  if (h<90) return 'modalWarm'
+  if (h<150) return 'mayor'
+  if (h<210) return 'modalCool'
+  if (h<270) return 'menor'
+  if (h<330) return 'modalCool'
+  return 'mayor'
+}
+
+function chooseProgression(data){
+  const hA = data.dominantColors?.[0]?.h ?? 0
+  const fam = hueFamily(hA)
+  const bank = HARM.PROG[fam==='mayor'?'mayor':(fam==='menor'?'menor':(fam==='modalCool'?'modalCool':'modalWarm'))]
+  return bank[(Math.random()*bank.length)|0]
+}
+
+// raíz global a partir del mood
+function globalRoot(mood){ return (mood==='feliz') ? 'C3' : 'A2' }
+
+// construye notas del acorde con voz conducida cerca del registro previo
+function chordNotesFromDegree(rootNote, degree, addTension=true, prevVoices=[]){
+  const f = Tone.Frequency(rootNote)
+  const offs = HARM.DEG[degree] || [0,4,7]
+  const chord = offs.map(semi => f.transpose(semi).toNote())
+  if (addTension && Math.random()<.6) {
+    const t = [9,11,14][(Math.random()*3)|0]
+    chord.push(f.transpose(t).toNote())
+  }
+  const target = []
+  const maxVoices = 4
+  chord.forEach(n=>{
+    const Hz = Tone.Frequency(n).toFrequency()
+    const prevHz = prevVoices.length? prevVoices.reduce((a,b)=>a+Tone.Frequency(b).toFrequency(),0)/prevVoices.length : Hz
+    let m = Hz
+    while (m < prevHz-300) m*=2
+    while (m > prevHz+300) m/=2
+    target.push(Tone.Frequency(m).toNote())
+  })
+  return target.slice(0, maxVoices)
+}
+
 export default function ColorSynth(){
   const [imgURL, setImgURL] = useState(null)
   const [analyzing, setAnalyzing] = useState(false)
@@ -95,7 +181,10 @@ export default function ColorSynth(){
   const ambient = useRef(null)
   const pad = useRef(null)
   const padLoop = useRef(null)
+  const breathLoop = useRef(null)
   const arpLoop = useRef(null)
+  const barRef = useRef({ idx:0, degreeCycle:[], heldHue:null, heldScale:null, prevVoices:[] })
+  const extraRefs = useRef({})
 
   // viz
   // --- Visual autónomo: orbes por paleta ---
@@ -201,6 +290,26 @@ export default function ColorSynth(){
     ro.observe(box)
     return () => ro.disconnect()
   }, [imgRatio])
+
+  let lastNote = null
+  function safePick(scaleArray){
+    for (let t=0; t<5; t++){
+      const n = scaleArray[(Math.random()*scaleArray.length)|0]
+      if (n!==lastNote){ lastNote = n; return n }
+    }
+    return scaleArray[0]
+  }
+
+  function rebuildHarmonyCycle(data){
+    const mood = (data.coolness < 0.5) ? 'feliz' : 'triste'
+    const prog = chooseProgression(data)
+    const root = globalRoot(mood)
+    barRef.current.degreeCycle = prog
+    barRef.current.idx = 0
+    barRef.current.heldHue = data.dominantColors?.[0]?.h ?? 0
+    barRef.current.prevVoices = []
+    return { mood, root, prog }
+  }
 
   const setupAudioGraph = () => {
     if (fx.current.master) return
@@ -435,7 +544,7 @@ export default function ColorSynth(){
         oscillator:{ type:'triangle' },
         envelope:{ attack:2.2, decay:1.2, sustain:.85, release:3.8 }
       })
-      const detune = (5 + energy*7) // cents
+      const detune = 5 + energy*3 // cents
       droneTri.detune.value = detune
 
       // Filtros/efectos muy sutiles para claridad y aire
@@ -466,42 +575,58 @@ export default function ColorSynth(){
         options: { envelope:{ attack:1.2, decay:1, sustain:.9, release:4.2 } }
       }).connect(buses.current.pad)
 
-      const root = (mood==='feliz')?'C3':'A2'
-      const hA = d.dominantColors[0]?.h ?? 0
-      const hB = d.dominantColors[1]?.h ?? hA
-      const offs = merge([ offsetsForHue(hA, mood), offsetsForHue(hB, mood) ])
-      const scalePool = buildScaleFromOffsets(root, offs)
+      const { mood: baseMood, root } = rebuildHarmonyCycle(d)
 
-      function chordFrom(rootNote, m, e) {
-        const f = Tone.Frequency(rootNote)
-        const intervals = (m==='feliz')
-          ? [0, 4, 7, (e>.6? 11:9)]        // maj7 / add9
-          : [0, 3, 7, (e>.6? 10:9)]        // min7 / add9
-        if (Math.random()<.5) intervals[0] -= 12
-        if (Math.random()<.35) intervals.push(14) // add 6th/13th
-        return intervals.map(semi => f.transpose(semi).toNote())
-      }
+      // Pad B “breath”
+      const padB = new Tone.PolySynth(Tone.AMSynth, {
+        maxPolyphony: 4,
+        options:{ envelope:{ attack:1.6, decay:1.1, sustain:.85, release:4.5 } }
+      })
+      const padBGain = new Tone.Gain(Tone.dbToGain(-10))
+      const padBFilter = new Tone.Filter({ type:'lowpass', frequency: 1400, Q: 0.4 })
+      const breathLFO = new Tone.LFO({ frequency: 0.07, min: 600, max: 2200 }).start()
+      breathLFO.connect(padBFilter.frequency)
+      padB.chain(padBFilter, padBGain, buses.current.pad)
 
       padLoop.current?.dispose?.()
       padLoop.current = new Tone.Loop((time)=>{
-        const base = chordFrom(root, mood, energy)
-        const alt = d.dominantColors[1]?.h
-        const shift = alt ? ((alt%120)<60 ? 0 : 2) : 0
-        const chord = base.map(n => Tone.Frequency(n).transpose(shift).toNote())
-        chord.forEach(n=>{
-          const nudge = (Math.random()-.5)*0.03
-          pad.current.triggerAttackRelease(n, '2n', time+nudge, 0.7)
+        const { degreeCycle, idx, prevVoices } = barRef.current
+        const deg = degreeCycle[idx % degreeCycle.length]
+        const chord = chordNotesFromDegree(root, deg, true, prevVoices)
+        chord.forEach((n,i)=>{
+          const nudge = (Math.random()-.5)*0.02
+          pad.current.triggerAttackRelease(n, '1m', time+nudge, 0.75)
         })
-      }, Math.max(5.5, 9 - energy*4)).start(0)
+        barRef.current.prevVoices = chord
+        barRef.current.idx = (idx+1) % degreeCycle.length
+      }, '1m').start(0)
 
+      breathLoop.current?.dispose?.()
+      breathLoop.current = new Tone.Loop((time)=>{
+        const { prevVoices } = barRef.current
+        if (!prevVoices?.length) return
+        const top = prevVoices[prevVoices.length-1]
+        const pick = [2,5,9,11][(Math.random()*4)|0]
+        const tNote = Tone.Frequency(top).transpose(pick).toNote()
+        const dur = Math.random()<.4 ? '2n.' : '1n'
+        const nudge = (Math.random()-.5)*0.02
+        padB.triggerAttackRelease(tNote, dur, time+nudge, 0.55)
+      }, '2n').start('0:1')
+
+      extraRefs.current = { padB, padBGain, padBFilter, breathLFO, breathLoop: breathLoop.current }
+
+      lastNote = null
       arpLoop.current?.dispose?.()
       arpLoop.current = new Tone.Loop((time)=>{
-        const base = chordFrom(root, mood, energy)
-        const n = scalePool[(Math.random()*scalePool.length)|0]
+        if (Math.random()<.35) return
+        const { prevVoices } = barRef.current
+        if (!prevVoices?.length) return
+        const pool = prevVoices
+        const n = safePick(pool)
         const durn = (Math.random()<.5)?'8n':'4n'
-        const nudge = (Math.random()-.5)*0.02
-        pad.current.triggerAttackRelease(n, durn, time+nudge, 0.45)
-      }, Math.max(.28, .5 - energy*.25)).start(0)
+        const nudge = (Math.random()-.5)*0.015
+        pad.current.triggerAttackRelease(n, durn, time+nudge, 0.42)
+      }, '8n').start('0:2')
 
       return true
     }catch(e){ setErr(e.message||String(e)); return false }
@@ -574,7 +699,14 @@ export default function ColorSynth(){
   // cleanup helpers
   const stopAll = ()=>{
     try{ padLoop.current?.dispose?.(); padLoop.current=null }catch{}
+    try{ breathLoop.current?.dispose?.(); breathLoop.current=null }catch{}
     try{ arpLoop.current?.dispose?.(); arpLoop.current=null }catch{}
+    try{ safeDispose(extraRefs.current?.padB) }catch{}
+    try{ safeDispose(extraRefs.current?.padBGain) }catch{}
+    try{ safeDispose(extraRefs.current?.padBFilter) }catch{}
+    try{ safeDispose(extraRefs.current?.breathLFO) }catch{}
+    try{ safeDispose(extraRefs.current?.breathLoop) }catch{}
+    extraRefs.current = {}
     if (ambient.current){
       try{
         ambient.current.sine.triggerRelease?.()
@@ -606,6 +738,7 @@ export default function ColorSynth(){
       try{
         // Loops del pad / arpegio
         try{ padLoop?.current?.dispose?.() }catch{}
+        try{ breathLoop?.current?.dispose?.() }catch{}
         try{ arpLoop?.current?.dispose?.() }catch{}
 
         // Drone (dos capas en la versión actual)
@@ -617,6 +750,12 @@ export default function ColorSynth(){
 
         // Pad
         safeDispose(pad.current); pad.current = null
+        safeDispose(extraRefs.current?.padB)
+        safeDispose(extraRefs.current?.padBGain)
+        safeDispose(extraRefs.current?.padBFilter)
+        safeDispose(extraRefs.current?.breathLFO)
+        safeDispose(extraRefs.current?.breathLoop)
+        extraRefs.current = {}
 
         // FX y buses (no toques sliders/state)
         disconnect(buses.current?.drone); disconnect(buses.current?.pad)
