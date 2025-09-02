@@ -223,7 +223,8 @@ export default function ColorSynth(){
   const ambient = useRef(null)
   const pad = useRef(null)
   const padLoop = useRef(null)
-  const breathLoop = useRef(null)
+  const compLoop = useRef(null)
+  const compStepRef = useRef(0)
   const arpLoop = useRef(null)
   const barRef = useRef({ idx:0, degreeCycle:[], heldHue:null, heldScale:null, prevVoices:[] })
   const extraRefs = useRef({})
@@ -619,16 +620,20 @@ export default function ColorSynth(){
 
       const { mood: baseMood, root } = rebuildHarmonyCycle(d)
 
-      // Pad B “breath”
-      const padB = new Tone.PolySynth(Tone.AMSynth, {
-        maxPolyphony: 4,
-        options:{ envelope:{ attack:1.6, decay:1.1, sustain:.85, release:4.5 } }
+      // Companion mono synth locked to chord tones
+      const comp = new Tone.MonoSynth({
+        oscillator: { type: 'triangle' },
+        envelope: {
+          attack: 0.05 + (1 - d.coolness) * 0.25,
+          decay: 0.2,
+          sustain: 0.4,
+          release: 0.1 + (1 - d.coolness) * 0.3,
+        },
+        filterEnvelope: { attack: 0.01, decay: 0.2, sustain: 0, release: 0.2, baseFrequency: 200, octaves: 2 },
       })
-      const padBGain = new Tone.Gain(Tone.dbToGain(-10))
-      const padBFilter = new Tone.Filter({ type:'lowpass', frequency: 1400, Q: 0.4 })
-      const breathLFO = new Tone.LFO({ frequency: 0.07, min: 600, max: 2200 }).start()
-      breathLFO.connect(padBFilter.frequency)
-      padB.chain(padBFilter, padBGain, buses.current.pad)
+      const compFilter = new Tone.Filter({ type:'lowpass', frequency: 1600 + (1 - d.coolness)*1200, Q: 0.6 })
+      const compGain = new Tone.Gain(Tone.dbToGain(-9))
+      comp.chain(compFilter, compGain, buses.current.pad)
 
       padLoop.current?.dispose?.()
       padLoop.current = new Tone.Loop((time)=>{
@@ -643,20 +648,24 @@ export default function ColorSynth(){
         barRef.current.idx = (idx+1) % degreeCycle.length
       }, '1m').start(0)
 
-      breathLoop.current?.dispose?.()
-      breathLoop.current = new Tone.Loop((time)=>{
+      compLoop.current?.dispose?.()
+      const subdiv = uniqueHues<=2 ? '2n' : uniqueHues<=4 ? '4n' : uniqueHues<=6 ? '8n' : '16n'
+      compLoop.current = new Tone.Loop((time)=>{
         const { prevVoices } = barRef.current
         if (!prevVoices?.length) return
-        const top = prevVoices[prevVoices.length-1]
-        // Movimientos por GRADOS (no semitonos): 1–4 grados arriba dentro de la escala
-        const steps = [1,2,3,4][(Math.random()*4)|0]
-        const tNote = stepsAboveInPool(top, diatonicPool, steps)
-        const dur = Math.random()<.4 ? '2n.' : '1n'
-        const nudge = (Math.random()-.5)*0.02
-        padB.triggerAttackRelease(tNote, dur, time+nudge, 0.55)
-      }, '2n').start('0:1')
+        const notes = [...prevVoices].sort((a,b)=>Tone.Frequency(a).toFrequency() - Tone.Frequency(b).toFrequency())
+        let idx = compStepRef.current
+        if (d.coolness < 0.5) idx = (idx + 1) % notes.length
+        else idx = (idx - 1 + notes.length) % notes.length
+        compStepRef.current = idx
+        let tNote = notes[idx]
+        if (energy > 0.65 && Math.random() < 0.5) tNote = Tone.Frequency(tNote).transpose(12).toNote()
+        const silence = 0.10 + d.coolness*0.30
+        if (Math.random() < silence) return
+        comp.triggerAttackRelease(tNote, subdiv, time, 0.6)
+      }, subdiv).start('0:1')
 
-      extraRefs.current = { padB, padBGain, padBFilter, breathLFO, breathLoop: breathLoop.current }
+      extraRefs.current = { comp, compGain, compFilter }
 
       lastNote = null
       arpLoop.current?.dispose?.()
@@ -742,13 +751,11 @@ export default function ColorSynth(){
   // cleanup helpers
   const stopAll = ()=>{
     try{ padLoop.current?.dispose?.(); padLoop.current=null }catch{}
-    try{ breathLoop.current?.dispose?.(); breathLoop.current=null }catch{}
+    try{ compLoop.current?.dispose?.(); compLoop.current=null }catch{}
     try{ arpLoop.current?.dispose?.(); arpLoop.current=null }catch{}
-    try{ safeDispose(extraRefs.current?.padB) }catch{}
-    try{ safeDispose(extraRefs.current?.padBGain) }catch{}
-    try{ safeDispose(extraRefs.current?.padBFilter) }catch{}
-    try{ safeDispose(extraRefs.current?.breathLFO) }catch{}
-    try{ safeDispose(extraRefs.current?.breathLoop) }catch{}
+    try{ safeDispose(extraRefs.current?.comp) }catch{}
+    try{ safeDispose(extraRefs.current?.compGain) }catch{}
+    try{ safeDispose(extraRefs.current?.compFilter) }catch{}
     extraRefs.current = {}
     if (ambient.current){
       try{
@@ -781,7 +788,7 @@ export default function ColorSynth(){
       try{
         // Loops del pad / arpegio
         try{ padLoop?.current?.dispose?.() }catch{}
-        try{ breathLoop?.current?.dispose?.() }catch{}
+        try{ compLoop?.current?.dispose?.() }catch{}
         try{ arpLoop?.current?.dispose?.() }catch{}
 
         // Drone (dos capas en la versión actual)
@@ -793,11 +800,9 @@ export default function ColorSynth(){
 
         // Pad
         safeDispose(pad.current); pad.current = null
-        safeDispose(extraRefs.current?.padB)
-        safeDispose(extraRefs.current?.padBGain)
-        safeDispose(extraRefs.current?.padBFilter)
-        safeDispose(extraRefs.current?.breathLFO)
-        safeDispose(extraRefs.current?.breathLoop)
+        safeDispose(extraRefs.current?.comp)
+        safeDispose(extraRefs.current?.compGain)
+        safeDispose(extraRefs.current?.compFilter)
         extraRefs.current = {}
 
         // FX y buses (no toques sliders/state)
