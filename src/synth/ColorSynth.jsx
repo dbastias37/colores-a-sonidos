@@ -50,6 +50,38 @@ function noteForColor(h, pool){
   return pool[idx]
 }
 
+// --- Escala: helpers para forzar notas a la tonalidad ---
+function expandPool(oneOctavePool, octavesUp = 4, octavesDown = 3){
+  const out = []
+  for (let o=-octavesDown; o<=octavesUp; o++){
+    oneOctavePool.forEach(n => out.push(Tone.Frequency(n).transpose(o*12).toNote()))
+  }
+  return out
+}
+
+function nearestInPool(note, pool){
+  if (!pool?.length) return note
+  const hz = Tone.Frequency(note).toFrequency()
+  let best = pool[0], bestDiff = Infinity
+  for (const n of pool){
+    const d = Math.abs(Tone.Frequency(n).toFrequency() - hz)
+    if (d < bestDiff){ best = n; bestDiff = d }
+  }
+  return best
+}
+
+function stepsAboveInPool(note, pool, steps = 1){
+  if (!pool?.length) return note
+  const hz = Tone.Frequency(note).toFrequency()
+  let idx = 0, bestDiff = Infinity
+  pool.forEach((n,i)=>{
+    const d = Math.abs(Tone.Frequency(n).toFrequency() - hz)
+    if (d < bestDiff){ bestDiff = d; idx = i }
+  })
+  const t = Math.min(pool.length - 1, idx + steps)
+  return pool[t]
+}
+
 // ---------- Director de Armonía ----------
 const HARM = {
   // offsets diatónicos / modales
@@ -115,25 +147,33 @@ function chooseProgression(data){
 function globalRoot(mood){ return (mood==='feliz') ? 'C3' : 'A2' }
 
 // construye notas del acorde con voz conducida cerca del registro previo
-function chordNotesFromDegree(rootNote, degree, addTension=true, prevVoices=[]){
+function chordNotesFromDegree(rootNote, degree, addTension=true, prevVoices=[], pool=null){
   const f = Tone.Frequency(rootNote)
   const offs = HARM.DEG[degree] || [0,4,7]
   const chord = offs.map(semi => f.transpose(semi).toNote())
+
+  // Tensiones más seguras: 9 y 13 (evitamos 11 salvo modo Lydian)
   if (addTension && Math.random()<.6) {
-    const t = [9,11,14][(Math.random()*3)|0]
-    chord.push(f.transpose(t).toNote())
+    const tChoices = [9,14]
+    let tNote = f.transpose(tChoices[(Math.random()*tChoices.length)|0]).toNote()
+    if (pool) tNote = nearestInPool(tNote, pool)
+    chord.push(tNote)
   }
+
   const target = []
-  const maxVoices = 4
   chord.forEach(n=>{
     const Hz = Tone.Frequency(n).toFrequency()
-    const prevHz = prevVoices.length? prevVoices.reduce((a,b)=>a+Tone.Frequency(b).toFrequency(),0)/prevVoices.length : Hz
+    const prevHz = prevVoices.length
+      ? prevVoices.reduce((a,b)=>a+Tone.Frequency(b).toFrequency(),0)/prevVoices.length
+      : Hz
     let m = Hz
-    while (m < prevHz-300) m*=2
-    while (m > prevHz+300) m/=2
-    target.push(Tone.Frequency(m).toNote())
+    while (m < prevHz-300) m *= 2
+    while (m > prevHz+300) m /= 2
+    let note = Tone.Frequency(m).toNote()
+    if (pool) note = nearestInPool(note, pool)
+    target.push(note)
   })
-  return target.slice(0, maxVoices)
+  return target.slice(0, 4)
 }
 
 export default function ColorSynth(){
@@ -155,6 +195,8 @@ export default function ColorSynth(){
   const caracter = energy > 0.65 ? 'estruendoso' : 'calmo'
   const rootNote = (mood==='feliz')?'C3':'A2'
   const scalePool = data ? (()=>{ const hA = data.dominantColors[0]?.h ?? 0; const hB = data.dominantColors[1]?.h ?? hA; const offs = merge([ offsetsForHue(hA, mood), offsetsForHue(hB, mood) ]); return buildScaleFromOffsets(rootNote, offs) })() : []
+  // Pool diatónico extendido a varias octavas para “lock” absoluto
+  const diatonicPool = expandPool(scalePool, 4, 3)
 
   // mixer
   const [mix, setMix] = useState({ drone:-12, pad:-8 })
@@ -592,7 +634,7 @@ export default function ColorSynth(){
       padLoop.current = new Tone.Loop((time)=>{
         const { degreeCycle, idx, prevVoices } = barRef.current
         const deg = degreeCycle[idx % degreeCycle.length]
-        const chord = chordNotesFromDegree(root, deg, true, prevVoices)
+        const chord = chordNotesFromDegree(root, deg, true, prevVoices, diatonicPool)
         chord.forEach((n,i)=>{
           const nudge = (Math.random()-.5)*0.02
           pad.current.triggerAttackRelease(n, '1m', time+nudge, 0.75)
@@ -606,8 +648,9 @@ export default function ColorSynth(){
         const { prevVoices } = barRef.current
         if (!prevVoices?.length) return
         const top = prevVoices[prevVoices.length-1]
-        const pick = [2,5,9,11][(Math.random()*4)|0]
-        const tNote = Tone.Frequency(top).transpose(pick).toNote()
+        // Movimientos por GRADOS (no semitonos): 1–4 grados arriba dentro de la escala
+        const steps = [1,2,3,4][(Math.random()*4)|0]
+        const tNote = stepsAboveInPool(top, diatonicPool, steps)
         const dur = Math.random()<.4 ? '2n.' : '1n'
         const nudge = (Math.random()-.5)*0.02
         padB.triggerAttackRelease(tNote, dur, time+nudge, 0.55)
