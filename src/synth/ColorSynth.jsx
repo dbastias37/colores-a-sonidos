@@ -1,12 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import * as Tone from 'tone'
 import { Upload, Play, Pause } from 'lucide-react'
 
 // PERF constants
-
-// Mobile-lite detection & worker
-const mobileLiteRef = useRef(false)
-const vizWorkerRef = useRef(null)
 const PERF = { LOOK_AHEAD: 0.12, MAX_EVENTS_PER_TICK: 10, MAX_SYNTH_VOICES: 8, IMG_MAX_SIZE: 180, SAMPLE_STRIDE: 20, MAX_PARTICLES: 700 }
 
 // Helpers
@@ -225,6 +221,9 @@ export default function ColorSynth(){
   // Pool diatónico extendido a varias octavas para “lock” absoluto
   const diatonicPool = expandPool(scalePool, 4, 3)
 
+  const mobileLiteRef = useRef(false)
+  const vizWorkerRef = useRef(null)
+
   // mixer
   const [mix, setMix] = useState({ drone:-12, pad:-8 })
   const busGainsRef = useRef({ drone: null, pad: null })
@@ -335,7 +334,7 @@ export default function ColorSynth(){
     const smallScreen = (window.innerWidth || 0) < 820
     mobileLiteRef.current = !!(isMobileUA || smallScreen)
   },[])
-useEffect(()=>{
+  useEffect(()=>{
     try{ workerRef.current = new Worker(new URL('../workers/analyze.worker.js', import.meta.url), { type:'module' }) }catch{}
     return ()=>{ workerRef.current?.terminate(); workerRef.current=null }
   },[])
