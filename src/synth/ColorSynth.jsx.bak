@@ -3,7 +3,7 @@ import * as Tone from 'tone'
 import { Upload, Play, Pause } from 'lucide-react'
 
 // PERF constants
-const PERF = { LOOK_AHEAD: 0.12, MAX_EVENTS_PER_TICK: 10, MAX_SYNTH_VOICES: 8, IMG_MAX_SIZE: 180, SAMPLE_STRIDE: 20, MAX_PARTICLES: 700 }
+const PERF = { LOOK_AHEAD: 0.10, MAX_EVENTS_PER_TICK: 10, MAX_SYNTH_VOICES: 8, IMG_MAX_SIZE: 180, SAMPLE_STRIDE: 20, MAX_PARTICLES: 700 }
 
 // Helpers
 const hsl = (h,s,l)=>`hsl(${h}, ${Math.round(s*100)}%, ${Math.round(l*100)}%)`
@@ -288,7 +288,7 @@ export default function ColorSynth(){
   },[])
 
   useEffect(()=>{
-    try { const ctx = Tone.getContext(); ctx.lookAhead = PERF.LOOK_AHEAD; ctx.latencyHint = 'playback' } catch{}
+    try { const ctx = Tone.getContext(); ctx.lookAhead = PERF.LOOK_AHEAD; ctx.latencyHint = 'balanced' } catch{}
     return ()=>{ hardStop() }
   }, [])
 
@@ -372,7 +372,7 @@ export default function ColorSynth(){
     Object.values(buses.current).forEach(b => b.chain(fx.current.delay, fx.current.reverb, fx.current.master))
   }
 
-  async function renderPrerollOffline(data, rootNote, chordNotes, dur = 3.6){
+  async function renderPrerollOffline(data, rootNote, chordNotes, dur = 2.2){
     const buffer = await Tone.Offline(({ transport }) => {
       const out = new Tone.Gain(1).toDestination()
 
@@ -401,7 +401,7 @@ export default function ColorSynth(){
       const mood = (data.coolness < 0.5) ? 'feliz' : 'triste'
       const rootNote = (mood==='feliz') ? 'C2' : 'G1'
       const chordNotes = ['C3','E3','G3','B3']
-      const audioBuffer = await renderPrerollOffline(data, rootNote, chordNotes, 3.6)
+      const audioBuffer = await renderPrerollOffline(data, rootNote, chordNotes, 2.2)
 
       disposePreroll()
       const player = new Tone.Player({
@@ -718,51 +718,30 @@ export default function ColorSynth(){
 
   const togglePlay = async ()=>{
     if (!data) return
-    if (playing){
-      try { stopAll() } catch{}
-      try { stopViz() } catch{}
-      try { Tone.Transport.stop(); Tone.Transport.cancel(0) } catch{}
-      try { disposePreroll() } catch{}
-      setPlaying(false); wasPlayingRef.current=false;
-      return
-    }
-
-    try { await Tone.start() } catch{}
-    setPlaying(true); wasPlayingRef.current=true;
-
-    const now = Tone.now()
-    const pr = prerollRef.current?.player
-    const a  = xfadeRef.current?.a
-    const b  = xfadeRef.current?.b
-
-    if (pr && a && b){
-      try {
-        pr.start(now)
-        a.gain.setValueAtTime(1, now)
-        b.gain.setValueAtTime(0, now)
-      } catch {}
-    }
-
-    // Construir el motor "live" en segundo plano y hacer crossfade cuando esté listo
-    setupFromData(data).then(()=>{
-      const t = Tone.now() + 0.06
-      try { Tone.Transport.start(t) } catch{}
-
+    if (playing){ stopAll(); stopViz(); Tone.Transport.stop(); setPlaying(false); wasPlayingRef.current=false; disposePreroll(); return }
+    const ok = await setupFromData(data)
+    if (ok){
+      const now = Tone.now()
+      const pr = prerollRef.current.player
+      const a = xfadeRef.current.a, b = xfadeRef.current.b
       if (pr && a && b){
-        try {
-          a.gain.linearRampTo(0, 1.0, t)
-          b.gain.linearRampTo(1, 1.0, t)
-          setTimeout(()=>{ try{ disposePreroll() }catch{} }, 1400)
-        } catch {}
+        try{
+          pr.start(now)
+          Tone.Transport.start(now + 0.12)
+          a.gain.setValueAtTime(1, now)
+          b.gain.setValueAtTime(0, now)
+          a.gain.linearRampTo(0, 1.2, now + 0.12)
+          b.gain.linearRampTo(1, 1.2, now + 0.12)
+          setTimeout(()=>{ disposePreroll() }, 1600)
+        }catch{
+          Tone.Transport.start(now + 0.05)
+        }
+      }else{
+        Tone.Transport.start(now + 0.05)
       }
-
-      // Arrancar la visual un poco después para evitar jank
-      setTimeout(()=>{ try{ startViz() }catch{} }, 600)
-    }).catch((e)=>{
-      console.error(e)
-      try { Tone.Transport.stop(); Tone.Transport.cancel(0) } catch{}
-      setPlaying(false); wasPlayingRef.current=false;
-    })
+      startViz()
+      setPlaying(true); wasPlayingRef.current=true;
+    }
   }
 
   const testAudio = async ()=>{
