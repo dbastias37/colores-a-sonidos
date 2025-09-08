@@ -341,7 +341,13 @@ useEffect(()=>{
   },[])
 
   useEffect(()=>{
-    try { const ctx = Tone.getContext(); ctx.lookAhead = PERF.LOOK_AHEAD; ctx.latencyHint = 'playback' } catch{}
+    try {
+      const ctx = Tone.getContext()
+      if (ctx) {
+        ctx.lookAhead = PERF.LOOK_AHEAD
+        ctx.latencyHint = 'playback'
+      }
+    } catch{}
     return ()=>{ hardStop() }
   }, [])
 
