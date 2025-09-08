@@ -346,62 +346,81 @@ useEffect(()=>{
   }, [])
 
   
-  useEffect(()=>{
-    const portal = document.getElementById('bg-viz-portal')
+  useEffect(() => {
+    const portal = document.getElementById('bg-viz-portal');
     if (portal && !portalCanvasRef.current) {
-      const c = document.createElement('canvas')
-      portal.innerHTML = ''
-      portal.appendChild(c)
-      portalCanvasRef.current = c
+      const c = document.createElement('canvas');
+      portal.innerHTML = '';
+      portal.appendChild(c);
+      portalCanvasRef.current = c;
 
-      // If mobile-lite and OffscreenCanvas supported, move viz to worker
-      const supportsOffscreen = !!(c.transferControlToOffscreen && typeof OffscreenCanvas !== 'undefined')
+      // Si es móvil y soporta OffscreenCanvas, mover la visual al worker
+      const supportsOffscreen = !!(c.transferControlToOffscreen && typeof OffscreenCanvas !== 'undefined');
       if (mobileLiteRef.current && supportsOffscreen && !vizWorkerRef.current) {
-        try{
-          const off = c.transferControlToOffscreen()
-          vizWorkerRef.current = new Worker(new URL('../workers/viz.worker.js', import.meta.url), { type:'module' })
-          const DPR = Math.min(window.devicePixelRatio || 1, 1.5)
-          const scale = 0.66
-          c.width = Math.floor(window.innerWidth * scale * DPR)
-          c.height = Math.floor(window.innerHeight * scale * DPR)
-          sizeRef.current = { w: c.width, h: c.height, dpr: DPR }
-          vizWorkerRef.current.postMessage({ type:'init', canvas: off, width: c.width, height: c.height, dpr: DPR }, [off])
-        }catch(e){
-          console.warn('OffscreenCanvas worker fallback:', e)
+        try {
+          const off = c.transferControlToOffscreen();
+          vizWorkerRef.current = new Worker(new URL('../workers/viz.worker.js', import.meta.url), { type: 'module' });
+
+          const DPR = Math.min(window.devicePixelRatio || 1, 1.5);
+          const scale = 0.66;
+          c.width = Math.floor(window.innerWidth * scale * DPR);
+          c.height = Math.floor(window.innerHeight * scale * DPR);
+          sizeRef.current = { w: c.width, h: c.height, dpr: DPR };
+
+          vizWorkerRef.current.postMessage(
+            { type: 'init', canvas: off, width: c.width, height: c.height, dpr: DPR },
+            [off]
+          );
+        } catch (e) {
+          console.warn('OffscreenCanvas worker fallback:', e);
         }
       }
     }
-    const onResize = debounce(()=>{ try{ resizeViz() }catch{} }, 120)
-    window.addEventListener('resize', onResize, { passive:true })
+
+    const onResize = debounce(() => {
+      try { resizeViz(); } catch {}
+    }, 120);
+    window.addEventListener('resize', onResize, { passive: true });
+
     const onVis = () => {
       if (document.visibilityState !== 'visible') {
-        try{ stopViz() }catch{}
+        try { stopViz(); } catch {}
       } else {
-        try{
-          if (vizWorkerRef.current){ vizWorkerRef.current.postMessage({ type:'start' }) }
-          else {
-            vizStateRef.current.running=true
-            vizStateRef.current.lastTime = performance.now()
-            rafRef.current = requestAnimationFrame(t=>loop(t))
+        try {
+          if (vizWorkerRef.current) {
+            vizWorkerRef.current.postMessage({ type: 'start' });
+          } else {
+            vizStateRef.current.running = true;
+            vizStateRef.current.lastTime = performance.now();
+            rafRef.current = requestAnimationFrame(t => loop(t));
           }
-        }catch{}
+        } catch {}
       }
-    }
-    document.addEventListener('visibilitychange', onVis)
-    return () => {
-      stopViz()
-      window.removeEventListener('resize', onResize)
-      document.removeEventListener('visibilitychange', onVis)
-      if (portalCanvasRef.current?.parentNode) {
-        portalCanvasRef.current.parentNode.removeChild(portalCanvasRef.current)
-      }
-      portalCanvasRef.current = null
-      if (vizWorkerRef.current){ try{ vizWorkerRef.current.terminate() }catch{}; vizWorkerRef.current=null }
-    }
-  }, [])
-)
+    };
+    document.addEventListener('visibilitychange', onVis);
 
-  function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms) } }
+    return () => {
+      stopViz();
+      window.removeEventListener('resize', onResize);
+      document.removeEventListener('visibilitychange', onVis);
+      if (portalCanvasRef.current?.parentNode) {
+        portalCanvasRef.current.parentNode.removeChild(portalCanvasRef.current);
+      }
+      portalCanvasRef.current = null;
+      if (vizWorkerRef.current) {
+        try { vizWorkerRef.current.terminate(); } catch {}
+        vizWorkerRef.current = null;
+      }
+    };
+  }, [])
+
+  function debounce(fn, ms) {
+    let t;
+    return (...a) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...a), ms);
+    };
+  }
 
 
   useEffect(() => {
@@ -1098,7 +1117,7 @@ const stopViz = () => {
 
 
   
-const resizeViz = () => {
+  const resizeViz = () => {
     const c = portalCanvasRef.current
     if (!c) return
     const DPR = Math.min(window.devicePixelRatio || 1, (/Mobi|Android/i.test(navigator.userAgent)? 1.25 : 1.5))
@@ -1109,8 +1128,6 @@ const resizeViz = () => {
     if (vizWorkerRef.current){
       try{ vizWorkerRef.current.postMessage({ type:'resize', width: c.width, height: c.height, dpr: DPR }) }catch{}
     }
-  }
-
   }
 
   // Emisor de orbes: llama con h,s,l,intensity desde tus disparos musicales
