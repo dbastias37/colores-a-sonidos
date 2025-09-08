@@ -3,6 +3,10 @@ import * as Tone from 'tone'
 import { Upload, Play, Pause } from 'lucide-react'
 
 // PERF constants
+
+// Mobile-lite detection & worker
+const mobileLiteRef = useRef(false)
+const vizWorkerRef = useRef(null)
 const PERF = { LOOK_AHEAD: 0.12, MAX_EVENTS_PER_TICK: 10, MAX_SYNTH_VOICES: 8, IMG_MAX_SIZE: 180, SAMPLE_STRIDE: 20, MAX_PARTICLES: 700 }
 
 // Helpers
@@ -101,20 +105,26 @@ const HARM = {
       ['I','V','vi','IV'],
       ['I','III','vi','IV'],
       ['I','ii','V','I'],
+      ['I','V','IV','I'],
+      ['I','IV','V','IV'],
     ],
     menor: [
       ['i','VI','III','VII'],
       ['i','iv','VII','III'],
       ['i','ii°','V','i'],
       ['i','VII','VI','VII'],
+      ['i','iv','i','V'],
+      ['i','VI','iv','V'],
     ],
     modalWarm: [
       ['I','II','V','I'],
       ['I','V','II','I'],
+      ['I','II','IV','I'],
     ],
     modalCool: [
       ['i','VII','IV','i'],
       ['i','IV','VII','i'],
+      ['i','v','VII','i'],
     ],
   },
   DEG: {
@@ -123,6 +133,23 @@ const HARM = {
     'i':[0,3,7,10], 'iv':[5,8,12], 'v':[7,10,14], 'VI':[8,12,15],
     'III':[3,7,10], 'VII':[10,14,17], 'II':[2,6,9]
   }
+}
+
+
+function chooseScaleMode(data){
+  const hA = data?.dominantColors?.[0]?.h ?? 0
+  const fam = hueFamily(hA)
+  const coolness = data?.coolness ?? 0.5
+  if (fam === 'modalCool' || coolness >= 0.55){
+    const bank = ['dorian','aeolian','phrygian','melodicMinor']
+    return bank[(Math.random()*bank.length)|0]
+  }
+  if (fam === 'menor'){
+    const bank = ['dorian','aeolian','melodicMinor']
+    return bank[(Math.random()*bank.length)|0]
+  }
+  const warm = ['ionian','lydian','mixolydian']
+  return warm[(Math.random()*warm.length)|0]
 }
 
 function hueFamily(h){
@@ -194,13 +221,33 @@ export default function ColorSynth(){
   const energy = data ? Math.min(1, 0.4 + data.avgSaturation*0.4 + richness*0.6) : 0
   const caracter = energy > 0.65 ? 'estruendoso' : 'calmo'
   const rootNote = (mood==='feliz')?'C3':'A2'
-  const scalePool = data ? (()=>{ const hA = data.dominantColors[0]?.h ?? 0; const hB = data.dominantColors[1]?.h ?? hA; const offs = merge([ offsetsForHue(hA, mood), offsetsForHue(hB, mood) ]); return buildScaleFromOffsets(rootNote, offs) })() : []
+  const scalePool = data ? (()=>{ const mode = chooseScaleMode(data); const offs = HARM.SCALES[mode]; return buildScaleFromOffsets(rootNote, offs) })() : []
   // Pool diatónico extendido a varias octavas para “lock” absoluto
   const diatonicPool = expandPool(scalePool, 4, 3)
 
   // mixer
   const [mix, setMix] = useState({ drone:-12, pad:-8 })
   const busGainsRef = useRef({ drone: null, pad: null })
+  const MOTIFS = {
+    warm: [
+      [1,0,1,0, 1,0,0,1,  1,0,1,0, 0,1,0,1],
+      [1,0,0,1, 1,0,1,0,  1,1,0,0, 1,0,1,0],
+      [1,0,1,1, 0,1,0,1,  1,0,0,1, 0,1,0,1],
+    ],
+    cool: [
+      [1,1,0,1, 0,1,0,0,  1,0,1,0, 0,0,1,0],
+      [1,0,1,0, 0,1,0,1,  0,1,0,0, 1,0,1,0],
+      [1,0,0,1, 0,1,0,1,  1,0,1,0, 0,0,1,0],
+    ],
+    neutral: [
+      [1,0,1,0, 0,1,0,1,  1,0,1,0, 0,1,0,0],
+      [1,0,0,1, 0,1,0,1,  0,1,0,1, 1,0,0,1],
+    ]
+  }
+  const motifRef = useRef({ pattern: [], dir: 1, degreeStep: 1, gate: 0.85 })
+  const melodyStepRef = useRef(0)
+  const lastMelNoteRef = useRef(null)
+
 
   function applyUserMix(key, db){ // llamado SOLO desde onChange del slider
     const node = busGainsRef.current[key]
@@ -282,7 +329,13 @@ export default function ColorSynth(){
   function allocParticle(){ return poolRef.current.pop() || {} }
   function freeParticle(p){ poolRef.current.push(p) }
 
+  
   useEffect(()=>{
+    const isMobileUA = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    const smallScreen = (window.innerWidth || 0) < 820
+    mobileLiteRef.current = !!(isMobileUA || smallScreen)
+  },[])
+useEffect(()=>{
     try{ workerRef.current = new Worker(new URL('../workers/analyze.worker.js', import.meta.url), { type:'module' }) }catch{}
     return ()=>{ workerRef.current?.terminate(); workerRef.current=null }
   },[])
@@ -292,6 +345,7 @@ export default function ColorSynth(){
     return ()=>{ hardStop() }
   }, [])
 
+  
   useEffect(()=>{
     const portal = document.getElementById('bg-viz-portal')
     if (portal && !portalCanvasRef.current) {
@@ -299,12 +353,39 @@ export default function ColorSynth(){
       portal.innerHTML = ''
       portal.appendChild(c)
       portalCanvasRef.current = c
+
+      // If mobile-lite and OffscreenCanvas supported, move viz to worker
+      const supportsOffscreen = !!(c.transferControlToOffscreen && typeof OffscreenCanvas !== 'undefined')
+      if (mobileLiteRef.current && supportsOffscreen && !vizWorkerRef.current) {
+        try{
+          const off = c.transferControlToOffscreen()
+          vizWorkerRef.current = new Worker(new URL('../workers/viz.worker.js', import.meta.url), { type:'module' })
+          const DPR = Math.min(window.devicePixelRatio || 1, 1.5)
+          const scale = 0.66
+          c.width = Math.floor(window.innerWidth * scale * DPR)
+          c.height = Math.floor(window.innerHeight * scale * DPR)
+          sizeRef.current = { w: c.width, h: c.height, dpr: DPR }
+          vizWorkerRef.current.postMessage({ type:'init', canvas: off, width: c.width, height: c.height, dpr: DPR }, [off])
+        }catch(e){
+          console.warn('OffscreenCanvas worker fallback:', e)
+        }
+      }
     }
-    const onResize = debounce(()=>resizeViz(),120)
+    const onResize = debounce(()=>{ try{ resizeViz() }catch{} }, 120)
     window.addEventListener('resize', onResize, { passive:true })
     const onVis = () => {
-      if (document.visibilityState !== 'visible') { vizStateRef.current.running=false }
-      else { vizStateRef.current.running=true; vizStateRef.current.lastTime=performance.now(); rafRef.current=requestAnimationFrame(t=>loop(t)) }
+      if (document.visibilityState !== 'visible') {
+        try{ stopViz() }catch{}
+      } else {
+        try{
+          if (vizWorkerRef.current){ vizWorkerRef.current.postMessage({ type:'start' }) }
+          else {
+            vizStateRef.current.running=true
+            vizStateRef.current.lastTime = performance.now()
+            rafRef.current = requestAnimationFrame(t=>loop(t))
+          }
+        }catch{}
+      }
     }
     document.addEventListener('visibilitychange', onVis)
     return () => {
@@ -315,8 +396,10 @@ export default function ColorSynth(){
         portalCanvasRef.current.parentNode.removeChild(portalCanvasRef.current)
       }
       portalCanvasRef.current = null
+      if (vizWorkerRef.current){ try{ vizWorkerRef.current.terminate() }catch{}; vizWorkerRef.current=null }
     }
   }, [])
+)
 
   function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms) } }
 
@@ -343,7 +426,21 @@ export default function ColorSynth(){
     return scaleArray[0]
   }
 
-  function rebuildHarmonyCycle(data){
+  
+  function chooseMotif(data){
+    const cool = data.coolness
+    const fam = hueFamily(data?.dominantColors?.[0]?.h ?? 0)
+    let bank = MOTIFS.neutral
+    if (cool >= 0.55 || fam==='modalCool' || fam==='menor') bank = MOTIFS.cool
+    else if (cool <= 0.45 || fam==='mayor' || fam==='modalWarm') bank = MOTIFS.warm
+    const pattern = bank[(Math.random()*bank.length)|0]
+    const dir = (cool >= 0.5) ? -1 : 1
+    const degreeStep = (data.contrast>0.5 ? 2 : 1)
+    const gate = 0.8 - Math.min(0.4, data.coolness*0.4)
+    return { pattern, dir, degreeStep, gate }
+  }
+
+function rebuildHarmonyCycle(data){
     const mood = (data.coolness < 0.5) ? 'feliz' : 'triste'
     const prog = chooseProgression(data)
     const root = globalRoot(mood)
@@ -669,16 +766,38 @@ export default function ColorSynth(){
 
       lastNote = null
       arpLoop.current?.dispose?.()
+      
+      motifRef.current = chooseMotif(d)
+      melodyStepRef.current = 0
+      lastMelNoteRef.current = barRef.current?.prevVoices?.[0] || root
+
+      arpLoop.current?.dispose?.()
       arpLoop.current = new Tone.Loop((time)=>{
-        if (Math.random()<.35) return
-        const { prevVoices } = barRef.current
-        if (!prevVoices?.length) return
-        const pool = prevVoices
-        const n = safePick(pool)
-        const durn = (Math.random()<.5)?'8n':'4n'
-        const nudge = (Math.random()-.5)*0.015
-        pad.current.triggerAttackRelease(n, durn, time+nudge, 0.42)
-      }, '8n').start('0:2')
+        const m = motifRef.current
+        if (!m?.pattern?.length) return
+        const step = melodyStepRef.current % m.pattern.length
+        melodyStepRef.current++
+        if (Math.random() > m.gate) return
+        if (!m.pattern[step]) return
+        const pool = diatonicPool
+        let base = lastMelNoteRef.current || (barRef.current?.prevVoices?.[0]||root)
+        let next = base
+        const flip = Math.random() < 0.15 ? -1 : 1
+        const steps = m.degreeStep * m.dir * flip
+        if (steps >= 0) next = stepsAboveInPool(base, pool, steps)
+        else {
+          const hz = Tone.Frequency(base).toFrequency()
+          let idx = 0, best = Infinity
+          pool.forEach((n,i)=>{ const d = Math.abs(Tone.Frequency(n).toFrequency()-hz); if (d<best){ best=d; idx=i } })
+          const t = Math.max(0, idx + steps)
+          next = pool[t]
+        }
+        lastMelNoteRef.current = next
+        const durn = (Math.random()<.3)?'16n': (Math.random()<.6? '8n':'8t')
+        const nudge = (Math.random()-.5)*0.012
+        try{ pad.current.triggerAttackRelease(next, durn, time+nudge, 0.48) }catch{}
+      }, '16n').start('0:0')
+('0:2')
 
       return true
     }catch(e){ setErr(e.message||String(e)); return false }
@@ -876,9 +995,18 @@ export default function ColorSynth(){
     }
   }
 
-  const startViz = () => {
+  
+const startViz = () => {
     const c = portalCanvasRef.current
     if (!c) return
+    const usingWorker = !!vizWorkerRef.current
+    if (usingWorker){
+      try {
+        vizWorkerRef.current.postMessage({ type:'config', palette: data?.dominantColors || [] })
+        vizWorkerRef.current.postMessage({ type:'start' })
+      } catch {}
+      return
+    }
     resizeViz()
     ctxRef.current = c.getContext('2d', { alpha: true })
     cancelAnimationFrame(rafRef.current)
@@ -890,6 +1018,7 @@ export default function ColorSynth(){
     vizStateRef.current.lastTime = performance.now()
     rafRef.current = requestAnimationFrame(loop)
   }
+
 
   function loop(ts){
     const ctx = ctxRef.current
@@ -957,14 +1086,19 @@ export default function ColorSynth(){
     rafRef.current = requestAnimationFrame(loop)
   }
 
-  const stopViz = () => {
+  
+const stopViz = () => {
+    if (vizWorkerRef.current){
+      try{ vizWorkerRef.current.postMessage({ type:'stop' }) }catch{}
+      return
+    }
     vizStateRef.current.running = false
     cancelAnimationFrame(rafRef.current)
-    rafRef.current = null
-    particlesRef.current.length = 0
   }
 
-  const resizeViz = () => {
+
+  
+const resizeViz = () => {
     const c = portalCanvasRef.current
     if (!c) return
     const DPR = Math.min(window.devicePixelRatio || 1, (/Mobi|Android/i.test(navigator.userAgent)? 1.25 : 1.5))
@@ -972,6 +1106,11 @@ export default function ColorSynth(){
     c.width = Math.floor(window.innerWidth * scale * DPR)
     c.height = Math.floor(window.innerHeight * scale * DPR)
     sizeRef.current = { w: c.width, h: c.height, dpr: DPR }
+    if (vizWorkerRef.current){
+      try{ vizWorkerRef.current.postMessage({ type:'resize', width: c.width, height: c.height, dpr: DPR }) }catch{}
+    }
+  }
+
   }
 
   // Emisor de orbes: llama con h,s,l,intensity desde tus disparos musicales
