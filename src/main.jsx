@@ -1,11 +1,11 @@
-import React from 'react'
+import { StrictMode, useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './styles.css'
 
 function ErrorBoundary({ children }) {
-  const [err, setErr] = React.useState(null)
-  React.useEffect(() => {
+  const [err, setErr] = useState(null)
+  useEffect(() => {
     const onErr = (ev) => setErr(ev?.error || ev)
     const onRej = (ev) => setErr(ev?.reason || ev)
     window.addEventListener('error', onErr)
@@ -19,5 +19,5 @@ function ErrorBoundary({ children }) {
 }
 
 const root = ReactDOM.createRoot(document.getElementById('root'))
-root.render(<React.StrictMode><ErrorBoundary><App/></ErrorBoundary></React.StrictMode>)
+root.render(<StrictMode><ErrorBoundary><App/></ErrorBoundary></StrictMode>)
 if (window.__hidePreboot) window.__hidePreboot()
