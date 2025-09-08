@@ -44,9 +44,14 @@ function buildScaleFromOffsets(rootNote, offsets){
   return offsets.map(semi => f.transpose(semi).toNote())
 }
 
-function noteForColor(h, pool){
+// Selecciona una nota según el matiz y la temperatura
+function noteForColor(h, pools){
+  if (!pools) return '—'
+  const hue = ((h % 360) + 360) % 360
+  const warm = hue < 150 || hue >= 330
+  const pool = warm ? pools.warm : pools.cool
   if (!pool?.length) return '—'
-  const idx = Math.floor((h % 360) / (360/pool.length))
+  const idx = Math.floor(hue / (360 / pool.length))
   return pool[idx]
 }
 
@@ -217,6 +222,9 @@ export default function ColorSynth(){
   const energy = data ? Math.min(1, 0.4 + data.avgSaturation*0.4 + richness*0.6) : 0
   const caracter = energy > 0.65 ? 'estruendoso' : 'calmo'
   const rootNote = (mood==='feliz')?'C3':'A2'
+  // Escalas base: mayor para tonos cálidos y menor para fríos
+  const warmPool = useMemo(()=>buildScaleFromOffsets(rootNote, HARM.SCALES.ionian), [rootNote])
+  const coolPool = useMemo(()=>buildScaleFromOffsets(rootNote, HARM.SCALES.aeolian), [rootNote])
   const scalePool = data ? (()=>{ const mode = chooseScaleMode(data); const offs = HARM.SCALES[mode]; return buildScaleFromOffsets(rootNote, offs) })() : []
   // Pool diatónico extendido a varias octavas para “lock” absoluto
   const diatonicPool = expandPool(scalePool, 4, 3)
@@ -269,6 +277,9 @@ export default function ColorSynth(){
   const ambient = useRef(null)
   const pad = useRef(null)
   const padLoop = useRef(null)
+  const ascPad = useRef(null)
+  const ascPadLoop = useRef(null)
+  const ascStepRef = useRef(0)
   const compLoop = useRef(null)
   const compStepRef = useRef(0)
   const arpLoop = useRef(null)
@@ -741,6 +752,22 @@ function rebuildHarmonyCycle(data){
 
       const { mood: baseMood, root } = rebuildHarmonyCycle(d)
 
+      // Pad secundario ascendente
+      const ascGain = new Tone.Gain(Tone.dbToGain(-12 + d.contrast*6)).connect(buses.current.pad)
+      ascPad.current = new Tone.Synth({
+        oscillator: { type: 'sine' },
+        envelope: { attack: 0.5, decay: 0.2, sustain: 0.7, release: 3.0 }
+      }).connect(ascGain)
+      const ascPool = expandPool(scalePool, 5, 0)
+      ascStepRef.current = 0
+      ascPadLoop.current?.dispose?.()
+      ascPadLoop.current = new Tone.Loop((time)=>{
+        if (!ascPad.current || !ascPool.length) return
+        const note = ascPool[ascStepRef.current % ascPool.length]
+        ascStepRef.current++
+        ascPad.current.triggerAttackRelease(note, '2n', time, 0.5)
+      }, '2n').start(0)
+
       // Companion mono synth locked to chord tones
       const comp = new Tone.MonoSynth({
         oscillator: { type: 'triangle' },
@@ -786,7 +813,7 @@ function rebuildHarmonyCycle(data){
         comp.triggerAttackRelease(tNote, subdiv, time, 0.6)
       }, subdiv).start('0:1')
 
-      extraRefs.current = { comp, compGain, compFilter }
+      extraRefs.current = { comp, compGain, compFilter, ascGain }
 
       lastNote = null
       arpLoop.current?.dispose?.()
@@ -915,11 +942,13 @@ function rebuildHarmonyCycle(data){
   // cleanup helpers
   const stopAll = ()=>{
     try{ padLoop.current?.dispose?.(); padLoop.current=null }catch{}
+    try{ ascPadLoop.current?.dispose?.(); ascPadLoop.current=null }catch{}
     try{ compLoop.current?.dispose?.(); compLoop.current=null }catch{}
     try{ arpLoop.current?.dispose?.(); arpLoop.current=null }catch{}
     try{ safeDispose(extraRefs.current?.comp) }catch{}
     try{ safeDispose(extraRefs.current?.compGain) }catch{}
     try{ safeDispose(extraRefs.current?.compFilter) }catch{}
+    try{ safeDispose(extraRefs.current?.ascGain) }catch{}
     extraRefs.current = {}
     if (ambient.current){
       try{
@@ -932,6 +961,7 @@ function rebuildHarmonyCycle(data){
       ambient.current=null
     }
     if (pad.current){ try{ pad.current.dispose?.() }catch{}; pad.current=null }
+    if (ascPad.current){ try{ ascPad.current.dispose?.() }catch{}; ascPad.current=null }
     try{ Tone.Transport.cancel(0) }catch{}
     disposePreroll()
   }
@@ -952,6 +982,7 @@ function rebuildHarmonyCycle(data){
       try{
         // Loops del pad / arpegio
         try{ padLoop?.current?.dispose?.() }catch{}
+        try{ ascPadLoop?.current?.dispose?.() }catch{}
         try{ compLoop?.current?.dispose?.() }catch{}
         try{ arpLoop?.current?.dispose?.() }catch{}
 
@@ -962,11 +993,13 @@ function rebuildHarmonyCycle(data){
         safeDispose(ambient.current?.tri)
         ambient.current = null
 
-        // Pad
+        // Pad principal y ascendente
         safeDispose(pad.current); pad.current = null
+        safeDispose(ascPad.current); ascPad.current = null
         safeDispose(extraRefs.current?.comp)
         safeDispose(extraRefs.current?.compGain)
         safeDispose(extraRefs.current?.compFilter)
+        safeDispose(extraRefs.current?.ascGain)
         extraRefs.current = {}
 
         // FX y buses (no toques sliders/state)
@@ -1233,7 +1266,7 @@ const stopViz = () => {
                         background:`hsl(${c.h} ${c.s*100}% ${c.l*100}%)`
                       }} />
                       <div className="small">
-                        {noteForColor(c.h, scalePool)}
+                        {noteForColor(c.h, { warm: warmPool, cool: coolPool })}
                       </div>
                     </div>
                   ))}
