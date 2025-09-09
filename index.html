@@ -1,133 +1,24 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Guía de Clases</title>
-<style>
-  body { font-family: system-ui, sans-serif; margin:0; background:#f8f9fa; color:#333; }
-  header { padding:1rem; text-align:center; }
-  main.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; padding:1rem; }
-  .card { background:#fff; border:1px solid #ddd; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,.05); padding:1rem; }
-  .card button { margin-top:.5rem; }
-  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.4); opacity:0; visibility:hidden; transition:opacity .3s ease; z-index:50; }
-  .overlay.active { opacity:1; visibility:visible; }
-  .panel { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%) scale(.98); opacity:0; background:#fff; width:clamp(560px,80vw,980px); max-height:88vh; overflow:hidden; border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,.2); z-index:60; transition:transform .3s ease, opacity .3s ease; display:flex; flex-direction:column; pointer-events:none; }
-  .panel.active { transform:translate(-50%,-50%) scale(1); opacity:1; pointer-events:auto; }
-  .panel-header { position:sticky; top:0; background:#fff; padding:1rem; border-bottom:1px solid #ddd; display:flex; align-items:center; justify-content:space-between; z-index:1; }
-  .panel-header h2 { margin:0; font-size:1.25rem; }
-  .panel-actions { display:flex; gap:.5rem; }
-  .tabs { display:flex; gap:.5rem; overflow-x:auto; padding:.5rem 1rem; background:#f5f5f5; }
-  .tabs button { flex:0 0 auto; border:none; background:#e0e0f8; border-radius:4px; padding:.5rem 1rem; cursor:pointer; }
-  .tabs button.active { background:#c5c5f4; }
-  .panel-body { flex:1; overflow:auto; padding:1rem; }
-  .panel-body section { margin-bottom:1rem; break-inside:avoid; page-break-inside:avoid; }
-  body.modal-open { overflow:hidden; }
-  @media print {
-    body { background:#fff; }
-    header, main.cards, .overlay { display:none !important; }
-    .panel { position:static; transform:none; opacity:1; box-shadow:none; width:auto; max-height:none; }
-    .panel-body { overflow:visible; }
-  }
-</style>
-</head>
-<body>
-<header><h1>Clases</h1></header>
-<main id="menu" class="cards"></main>
-<div id="overlay" class="overlay"></div>
-<div id="panel" class="panel" aria-hidden="true" role="dialog" aria-modal="true">
-  <div class="panel-header">
-    <h2 id="panelTitle"></h2>
-    <div class="panel-actions">
-      <button id="printBtn">Imprimir</button>
-      <button id="closeBtn" aria-label="Cerrar">&times;</button>
-    </div>
-  </div>
-  <nav id="tabs" class="tabs"></nav>
-  <div id="panelBody" class="panel-body"></div>
-</div>
-<script>
-const sesiones=[
-  {id:1,titulo:'Clase 1',tabs:[{titulo:'Resumen',contenido:'Contenido de la clase 1.'},{titulo:'Actividades',contenido:'Actividades de la clase 1.'}]},
-  {id:2,titulo:'Clase 2',tabs:[{titulo:'Resumen',contenido:'Contenido de la clase 2.'},{titulo:'Actividades',contenido:'Actividades de la clase 2.'}]},
-  {id:3,titulo:'Clase 3',tabs:[{titulo:'Resumen',contenido:'Contenido de la clase 3.'},{titulo:'Actividades',contenido:'Actividades de la clase 3.'}]},
-  {id:4,titulo:'Clase 4',tabs:[{titulo:'Resumen',contenido:'Contenido de la clase 4.'},{titulo:'Actividades',contenido:'Actividades de la clase 4.'}]},
-  {id:5,titulo:'Clase 5',tabs:[{titulo:'Resumen',contenido:'Contenido de la clase 5.'},{titulo:'Actividades',contenido:'Actividades de la clase 5.'}]},
-  {id:6,titulo:'Clase 6',tabs:[{titulo:'Resumen',contenido:'Contenido de la clase 6.'},{titulo:'Actividades',contenido:'Actividades de la clase 6.'}]},
-  {id:7,titulo:'Clase 7',tabs:[{titulo:'Resumen',contenido:'Contenido de la clase 7.'},{titulo:'Actividades',contenido:'Actividades de la clase 7.'}]},
-  {id:8,titulo:'Clase 8',tabs:[{titulo:'Resumen',contenido:'Contenido de la clase 8.'},{titulo:'Actividades',contenido:'Actividades de la clase 8.'}]},
-  {id:9,titulo:'Clase 9',tabs:[{titulo:'Resumen',contenido:'Contenido de la clase 9.'},{titulo:'Actividades',contenido:'Actividades de la clase 9.'}]},
-  {id:10,titulo:'Clase 10',tabs:[{titulo:'Resumen',contenido:'Contenido de la clase 10.'},{titulo:'Actividades',contenido:'Actividades de la clase 10.'}]}
-];
-
-const menu=document.getElementById('menu');
-const overlay=document.getElementById('overlay');
-const panel=document.getElementById('panel');
-const tabsEl=document.getElementById('tabs');
-const panelBody=document.getElementById('panelBody');
-const panelTitle=document.getElementById('panelTitle');
-const closeBtn=document.getElementById('closeBtn');
-const printBtn=document.getElementById('printBtn');
-let lastTrigger=null;
-
-function escapeHTML(str){const div=document.createElement('div');div.textContent=str;return div.innerHTML;}
-
-function renderTab(tab){panelBody.innerHTML='<section>'+escapeHTML(tab.contenido)+'</section>';}
-
-function renderTabs(tabs){
-  tabsEl.innerHTML='';
-  tabs.forEach((tab,i)=>{
-    const b=document.createElement('button');
-    b.textContent=tab.titulo;
-    b.addEventListener('click',()=>{
-      [...tabsEl.children].forEach(btn=>btn.classList.remove('active'));
-      b.classList.add('active');
-      renderTab(tab);
-    });
-    tabsEl.appendChild(b);
-    if(i===0){b.classList.add('active');renderTab(tab);}
-  });
-}
-
-function openPanel(session,trigger){
-  lastTrigger=trigger;
-  panelTitle.textContent=session.titulo;
-  renderTabs(session.tabs);
-  overlay.classList.add('active');
-  panel.classList.add('active');
-  panel.setAttribute('aria-hidden','false');
-  document.body.classList.add('modal-open');
-  setTimeout(()=>{const first=tabsEl.querySelector('button');if(first)first.focus();},0);
-}
-
-function closePanel(){
-  overlay.classList.remove('active');
-  panel.classList.remove('active');
-  panel.setAttribute('aria-hidden','true');
-  document.body.classList.remove('modal-open');
-  if(lastTrigger)lastTrigger.focus();
-}
-
-sesiones.forEach(s=>{
-  const card=document.createElement('div');
-  card.className='card';
-  card.innerHTML='<h3>'+escapeHTML(s.titulo)+'</h3><button class="open-panel" data-id="'+s.id+'">Abrir guía</button>';
-  menu.appendChild(card);
-});
-
-overlay.addEventListener('click',closePanel);
-closeBtn.addEventListener('click',closePanel);
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closePanel();});
-printBtn.addEventListener('click',()=>window.print());
-panel.addEventListener('click',e=>e.stopPropagation());
-
-menu.addEventListener('click',e=>{
-  const btn=e.target.closest('.open-panel');
-  if(!btn)return;
-  const id=Number(btn.dataset.id);
-  const session=sesiones.find(s=>s.id===id);
-  if(session)openPanel(session,btn);
-});
-</script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sintetizador de Colores</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link href="/src/styles.css" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="bg-viz-portal" aria-hidden="true"></div>
+    <div id="root"></div>
+    <div id="preboot" class="preboot">Cargando…</div>
+    <noscript class="noscript">Esta app necesita JavaScript.</noscript>
+    <script type="module" src="/src/main.jsx"></script>
+    <script>
+      window.__hidePreboot = () => { const el = document.getElementById('preboot'); if (el) el.style.display='none' }
+      window.addEventListener('error', (e)=>{ const el = document.getElementById('preboot'); if (el) { el.style.display='grid'; el.textContent = 'Error: '+(e.error?.message||e.message) } })
+      window.addEventListener('unhandledrejection', (e)=>{ const el = document.getElementById('preboot'); if (el) { el.style.display='grid'; el.textContent = 'Error Promesa: '+(e.reason?.message||String(e.reason)) } })
+    </script>
+  </body>
 </html>
