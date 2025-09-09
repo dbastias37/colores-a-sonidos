@@ -83,8 +83,9 @@ function stepsAboveInPool(note, pool, steps = 1){
     const d = Math.abs(Tone.Frequency(n).toFrequency() - hz)
     if (d < bestDiff){ bestDiff = d; idx = i }
   })
-  const t = Math.min(pool.length - 1, idx + steps)
-  return pool[t]
+  const len = pool.length
+  const t = (idx + steps) % len
+  return pool[(t + len) % len]
 }
 
 // ---------- Director de Armonía ----------
@@ -759,13 +760,15 @@ function rebuildHarmonyCycle(data){
         envelope: { attack: 0.5, decay: 0.2, sustain: 0.7, release: 3.0 }
       }).connect(ascGain)
       const ascPool = expandPool(scalePool, 5, 0)
+      const loopLen = Math.min(6, Math.max(3, ascPool.length))
+      const ascSeq = Array.from({length: loopLen}, () => ascPool[(Math.random()*ascPool.length)|0])
       ascStepRef.current = 0
       ascPadLoop.current?.dispose?.()
       ascPadLoop.current = new Tone.Loop((time)=>{
-        if (!ascPad.current || !ascPool.length) return
-        const note = ascPool[ascStepRef.current % ascPool.length]
+        if (!ascPad.current || !ascSeq.length) return
+        const note = ascSeq[ascStepRef.current % ascSeq.length]
         ascStepRef.current++
-        ascPad.current.triggerAttackRelease(note, '2n', time, 0.5)
+        ascPad.current.triggerAttackRelease(note, '2n', time, 0.35)
       }, '2n').start(0)
 
       // Companion mono synth locked to chord tones
