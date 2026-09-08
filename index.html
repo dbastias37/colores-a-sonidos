@@ -2,23 +2,15 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sintetizador de Colores</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;600;700&display=swap" rel="stylesheet">
-    <link href="/src/styles.css" rel="stylesheet" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#101114" />
+    <meta name="description" content="Sube una imagen y escucha su paisaje sonoro. Melodías ambientales creadas a partir del color, la luminosidad y la entropía de tus imágenes." />
+    <title>Colores a sonidos — Escucha lo que ves</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
   <body>
-    <div id="bg-viz-portal" aria-hidden="true"></div>
     <div id="root"></div>
-    <div id="preboot" class="preboot">Cargando…</div>
-    <noscript class="noscript">Esta app necesita JavaScript.</noscript>
+    <noscript class="noscript">Activa JavaScript para transformar tus imágenes en música.</noscript>
     <script type="module" src="/src/main.jsx"></script>
-    <script>
-      window.__hidePreboot = () => { const el = document.getElementById('preboot'); if (el) el.style.display='none' }
-      window.addEventListener('error', (e)=>{ const el = document.getElementById('preboot'); if (el) { el.style.display='grid'; el.textContent = 'Error: '+(e.error?.message||e.message) } })
-      window.addEventListener('unhandledrejection', (e)=>{ const el = document.getElementById('preboot'); if (el) { el.style.display='grid'; el.textContent = 'Error Promesa: '+(e.reason?.message||String(e.reason)) } })
-    </script>
   </body>
 </html>

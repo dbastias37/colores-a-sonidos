@@ -1,23 +1,12 @@
-import { StrictMode, useEffect, useState } from 'react'
+import { Component, StrictMode } from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './styles.css'
-
-function ErrorBoundary({ children }) {
-  const [err, setErr] = useState(null)
-  useEffect(() => {
-    const onErr = (ev) => setErr(ev?.error || ev)
-    const onRej = (ev) => setErr(ev?.reason || ev)
-    window.addEventListener('error', onErr)
-    window.addEventListener('unhandledrejection', onRej)
-    return () => { window.removeEventListener('error', onErr); window.removeEventListener('unhandledrejection', onRej) }
-  }, [])
-  if (err) {
-    return (<div className="container"><div className="card"><h1>Ocurrió un error</h1><pre style={{whiteSpace:'pre-wrap',opacity:.8}}>{String(err?.message||err)}</pre><button className="btn blue" onClick={()=>location.reload()}>Recargar</button></div></div>)
+class ErrorBoundary extends Component {
+  state = { failed: false }
+  static getDerivedStateFromError() { return { failed: true } }
+  render() {
+    return this.state.failed ? <main className="app-shell" style={{ paddingTop: 60 }}><h1>No pudimos abrir el estudio.</h1><p style={{ margin: '20px 0' }}>Recarga la página para volver a intentarlo.</p><button className="play-button" onClick={() => location.reload()}>Recargar</button></main> : this.props.children
   }
-  return children
 }
-
-const root = ReactDOM.createRoot(document.getElementById('root'))
-root.render(<StrictMode><ErrorBoundary><App/></ErrorBoundary></StrictMode>)
-if (window.__hidePreboot) window.__hidePreboot()
+ReactDOM.createRoot(document.getElementById('root')).render(<StrictMode><ErrorBoundary><App/></ErrorBoundary></StrictMode>)

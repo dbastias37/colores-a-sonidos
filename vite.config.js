@@ -8,7 +8,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
-        manualChunks: { react: ['react','react-dom'], tone: ['tone'] }
+        manualChunks: { react: ['react','react-dom'] }
       }
     }
   }
